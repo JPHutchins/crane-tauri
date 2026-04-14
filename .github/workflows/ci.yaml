@@ -7,100 +7,106 @@ on:
 
 jobs:
   root-check:
-    name: Root flake check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
-      - name: Root flake check
-        run: |
+      - run: |
           set -euo pipefail
-          mkdir -p ci-logs/root-check
-          nix flake check 2>&1 | tee ci-logs/root-check/nix-flake-check.log
-      - name: Pack root-check logs
-        if: ${{ always() }}
-        run: |
-          set -euo pipefail
-          tar -cf root-check-logs.tar -C ci-logs/root-check .
-      - name: Upload root-check logs
-        if: ${{ always() }}
+          mkdir -p ci-logs
+          nix flake check 2>&1 | tee ci-logs/root-check.log
+      - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          path: root-check-logs.tar
-          if-no-files-found: warn
+          path: ci-logs/root-check.log
+          if-no-files-found: ignore
           archive: false
 
   nixfmt:
-    name: Nix formatting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
-      - name: Nix formatting
-        run: |
+      - run: |
           set -euo pipefail
-          mkdir -p ci-logs/nixfmt
+          mkdir -p ci-logs
           find . -name '*.nix' -not -path '*/result/*' -not -path '*/node_modules/*' -print0 \
-            | xargs -0 nix run nixpkgs#nixfmt -- --check 2>&1 | tee ci-logs/nixfmt/nixfmt.log
-      - name: Pack nixfmt logs
-        if: ${{ always() }}
-        run: |
-          set -euo pipefail
-          tar -cf nixfmt-logs.tar -C ci-logs/nixfmt .
-      - name: Upload nixfmt logs
-        if: ${{ always() }}
+            | xargs -0 nix run nixpkgs#nixfmt -- --check 2>&1 | tee ci-logs/nixfmt.log
+      - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          path: nixfmt-logs.tar
-          if-no-files-found: warn
+          path: ci-logs/nixfmt.log
+          if-no-files-found: ignore
           archive: false
 
   fixture-check:
-    name: Fixture flake check (build, clippy, fmt, nixfmt)
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
-      - name: Fixture flake check
-        run: |
+      - run: |
           set -euo pipefail
-          mkdir -p ci-logs/fixture-check
-          nix flake check ./fixtures/tauri-app -L 2>&1 | tee ci-logs/fixture-check/flake-check.log
-      - name: Pack fixture-check logs
-        if: ${{ always() }}
-        run: |
-          set -euo pipefail
-          tar -cf fixture-check-logs.tar -C ci-logs/fixture-check .
-      - name: Upload fixture-check logs
-        if: ${{ always() }}
+          mkdir -p ci-logs
+          nix flake check ./fixtures/tauri-app -L 2>&1 | tee "ci-logs/fixture-check-${{ matrix.os }}.log"
+      - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          path: fixture-check-logs.tar
-          if-no-files-found: warn
+          path: ci-logs/fixture-check-${{ matrix.os }}.log
+          if-no-files-found: ignore
           archive: false
 
   integration:
-    name: Integration tests
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
-      - name: Integration tests
+      - run: |
+          set -euo pipefail
+          mkdir -p "ci-logs/integration-${{ matrix.os }}"
+          CI_LOG_DIR="$PWD/ci-logs/integration-${{ matrix.os }}" ./tests/integration.sh 2>&1 | tee "ci-logs/integration-${{ matrix.os }}.log"
+      - if: ${{ always() }}
         run: |
           set -euo pipefail
-          mkdir -p ci-logs/integration/details
-          CI_LOG_DIR="$PWD/ci-logs/integration/details" ./tests/integration.sh 2>&1 | tee ci-logs/integration/integration.log
-      - name: Pack integration logs
-        if: ${{ always() }}
-        run: |
-          set -euo pipefail
-          tar -cf integration-logs.tar -C ci-logs/integration .
-      - name: Upload integration logs
-        if: ${{ always() }}
+          for log in build-initial.log build-source-change.log build-manifest-change.log; do
+            if [ -f "ci-logs/integration-${{ matrix.os }}/$log" ]; then
+              cp "ci-logs/integration-${{ matrix.os }}/$log" "ci-logs/integration-${log%.log}-${{ matrix.os }}.log"
+            fi
+          done
+      - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          path: integration-logs.tar
-          if-no-files-found: warn
+          path: ci-logs/integration-${{ matrix.os }}.log
+          if-no-files-found: ignore
+          archive: false
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: ci-logs/integration-build-initial-${{ matrix.os }}.log
+          if-no-files-found: ignore
+          archive: false
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: ci-logs/integration-build-source-change-${{ matrix.os }}.log
+          if-no-files-found: ignore
+          archive: false
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: ci-logs/integration-build-manifest-change-${{ matrix.os }}.log
+          if-no-files-found: ignore
           archive: false
