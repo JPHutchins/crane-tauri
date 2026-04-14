@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  root-check:
+    name: Root flake check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Root flake check
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs/root-check
+          nix flake check 2>&1 | tee ci-logs/root-check/nix-flake-check.log
+      - name: Pack root-check logs
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          tar -cf root-check-logs.tar -C ci-logs/root-check .
+      - name: Upload root-check logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: root-check-logs.tar
+          if-no-files-found: warn
+          archive: false
+
+  nixfmt:
+    name: Nix formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - name: Nix formatting
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs/nixfmt
+          find . -name '*.nix' -not -path '*/result/*' -not -path '*/node_modules/*' -print0 \
+            | xargs -0 nix run nixpkgs#nixfmt -- --check 2>&1 | tee ci-logs/nixfmt/nixfmt.log
+      - name: Pack nixfmt logs
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          tar -cf nixfmt-logs.tar -C ci-logs/nixfmt .
+      - name: Upload nixfmt logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: nixfmt-logs.tar
+          if-no-files-found: warn
+          archive: false
+
+  fixture-check:
+    name: Fixture flake check (build, clippy, fmt, nixfmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Fixture flake check
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs/fixture-check
+          nix flake check ./fixtures/tauri-app -L 2>&1 | tee ci-logs/fixture-check/flake-check.log
+      - name: Pack fixture-check logs
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          tar -cf fixture-check-logs.tar -C ci-logs/fixture-check .
+      - name: Upload fixture-check logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: fixture-check-logs.tar
+          if-no-files-found: warn
+          archive: false
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Integration tests
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs/integration/details
+          CI_LOG_DIR="$PWD/ci-logs/integration/details" ./tests/integration.sh 2>&1 | tee ci-logs/integration/integration.log
+      - name: Pack integration logs
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          tar -cf integration-logs.tar -C ci-logs/integration .
+      - name: Upload integration logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: integration-logs.tar
+          if-no-files-found: warn
+          archive: false

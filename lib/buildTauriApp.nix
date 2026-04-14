@@ -32,14 +32,27 @@ let
 
   tauriSrc = src + "/src-tauri";
 
-  cargoSrc = lib.fileset.toSource {
+  cargoSources = craneLib.fileset.commonCargoSources tauriSrc;
+
+  tauriExtraFiles = lib.fileset.unions [
+    (tauriSrc + "/tauri.conf.json")
+    (tauriSrc + "/icons")
+    (lib.fileset.maybeMissing (tauriSrc + "/capabilities"))
+  ];
+
+  appSrc = lib.fileset.toSource {
     root = tauriSrc;
     fileset = lib.fileset.unions [
-      (craneLib.fileset.commonCargoSources tauriSrc)
-      (tauriSrc + "/tauri.conf.json")
-      (tauriSrc + "/icons")
-      (lib.fileset.maybeMissing (tauriSrc + "/capabilities"))
+      cargoSources
+      tauriExtraFiles
     ];
+  };
+
+  depsSrc = lib.fileset.toSource {
+    root = tauriSrc;
+    fileset = lib.fileset.difference cargoSources (
+      lib.fileset.fileFilter (file: lib.hasSuffix ".rs" file.name) tauriSrc
+    );
   };
 
   tauriBuildInputs =
@@ -59,21 +72,27 @@ let
       librsvg
       libayatana-appindicator
     ]
-    ++ lib.optionals stdenv.isDarwin [
+    ++ lib.optionals stdenv.hostPlatform.isDarwin [
       libiconv
     ];
 
-  commonArgs = cleanedArgs // {
+  sharedArgs = cleanedArgs // {
     inherit pname version;
-    src = cargoSrc;
     strictDeps = true;
     cargoExtraArgs = "--features tauri/custom-protocol ${cargoExtraArgs}";
     nativeBuildInputs = [ pkgs.pkg-config ] ++ extraNativeBuildInputs;
     buildInputs = tauriBuildInputs ++ extraBuildInputs;
   };
 
+  commonArgs = sharedArgs // {
+    src = appSrc;
+  };
+
   resolvedCargoArtifacts =
-    if cargoArtifacts != null then cargoArtifacts else craneLib.buildDepsOnly commonArgs;
+    if cargoArtifacts != null then
+      cargoArtifacts
+    else
+      craneLib.buildDepsOnly (sharedArgs // { src = depsSrc; });
 
   tauriConfig = builtins.toJSON (
     lib.recursiveUpdate {
@@ -94,12 +113,20 @@ let
 
       buildPhaseCargoCommand = ''
         cargo tauri build --no-bundle \
-          --config '${tauriConfig}'
+          ${commonArgs.cargoExtraArgs} \
+          --config "$TAURI_CONFIG"
       '';
 
       installPhaseCommand = ''
+        binaryPath=$(find target -type f -path ${lib.escapeShellArg "*/release/${binaryName}"} -print -quit)
+
+        if [ -z "$binaryPath" ]; then
+          echo "failed to locate built binary ${binaryName}" >&2
+          exit 1
+        fi
+
         mkdir -p $out/bin
-        cp target/release/${lib.escapeShellArg binaryName} $out/bin/
+        cp "$binaryPath" $out/bin/
       '';
 
       doInstallCargoArtifacts = false;
