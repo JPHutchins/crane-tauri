@@ -92,7 +92,7 @@ done
 
 mkdir -p "$WORKDIR/src-tauri"
 
-for path in Cargo.lock Cargo.toml build.rs tauri.conf.json capabilities gen icons src; do
+for path in Cargo.lock Cargo.toml build.rs tauri.conf.json capabilities icons src; do
   cp -r "$FIXTURE/src-tauri/$path" "$WORKDIR/src-tauri/$path"
 done
 
