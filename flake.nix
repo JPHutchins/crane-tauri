@@ -1,5 +1,5 @@
 {
-  description = "Tauri app — Rust crate build";
+  description = "Tauri app";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -33,9 +33,37 @@
           ];
         };
 
+        frontend = pkgs.buildNpmPackage {
+          pname = "tauri-app-frontend";
+          version = "0.1.0";
+
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./package.json
+              ./package-lock.json
+              ./tsconfig.json
+              ./tsconfig.node.json
+              ./vite.config.ts
+              ./index.html
+              ./src
+              ./public
+            ];
+          };
+
+          npmDepsHash = "sha256-6llRWm8jwaIPSzTPTI1tBoGRknuvEAUS9YJnE5SSkb4=";
+
+          installPhase = ''
+            runHook preInstall
+            cp -r dist $out
+            runHook postInstall
+          '';
+        };
+
         commonArgs = {
           inherit src;
           strictDeps = true;
+          cargoExtraArgs = "--features tauri/custom-protocol";
 
           nativeBuildInputs = with pkgs; [
             pkg-config
@@ -65,10 +93,30 @@
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-        tauri-app = craneLib.buildPackage (
+        tauriConfig = builtins.toJSON {
+          build = {
+            frontendDist = "${frontend}";
+            beforeBuildCommand = "";
+          };
+        };
+
+        tauri-app = craneLib.mkCargoDerivation (
           commonArgs
           // {
             inherit cargoArtifacts;
+            TAURI_CONFIG = tauriConfig;
+
+            nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.cargo-tauri ];
+
+            buildPhaseCargoCommand = ''
+              cargo tauri build --no-bundle \
+                --config '${tauriConfig}'
+            '';
+
+            installPhaseCommand = ''
+              mkdir -p $out/bin
+              cp target/release/tauri-app $out/bin/
+            '';
           }
         );
       in
@@ -81,6 +129,7 @@
             // {
               inherit cargoArtifacts;
               cargoClippyExtraArgs = "--all-targets -- -D warnings";
+              TAURI_CONFIG = tauriConfig;
             }
           );
 
@@ -92,7 +141,10 @@
           '';
         };
 
-        packages.default = tauri-app;
+        packages = {
+          inherit frontend;
+          default = tauri-app;
+        };
 
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
