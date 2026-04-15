@@ -20,6 +20,16 @@ run_verbose() {
   "$@"
 }
 
+replace_in_file() {
+  local expression="$1"
+  local file="$2"
+  local temp_file
+
+  temp_file=$(mktemp)
+  sed "$expression" "$file" > "$temp_file"
+  mv "$temp_file" "$file"
+}
+
 capture_verbose() {
   local log_file="$1"
   shift
@@ -181,7 +191,7 @@ cat > "$WORKDIR/flake.nix" << 'FLAKE_NIX'
 }
 FLAKE_NIX
 
-sed -i "s|CRANE_TAURI_URL_PLACEHOLDER|path:$LIB_SNAPSHOT|" "$WORKDIR/flake.nix"
+replace_in_file "s|CRANE_TAURI_URL_PLACEHOLDER|path:$LIB_SNAPSHOT|" "$WORKDIR/flake.nix"
 
 cd "$WORKDIR"
 git init -q
@@ -202,7 +212,7 @@ deps_hash_before=$(cargo_artifacts_out_path)
 echo "=== Test 5: Dep caching survives Rust source changes ==="
 
 echo "  Modifying Rust source..."
-sed -i 's/Hello, {}!/Goodbye, {}!/' src-tauri/src/lib.rs
+replace_in_file 's/Hello, {}!/Goodbye, {}!/' src-tauri/src/lib.rs
 commit_all "modify source"
 
 echo "  Rebuilding after source change..."
@@ -228,7 +238,7 @@ assert_log_lacks 'tauri-app-deps-0\.1\.0\.drv' "$BUILD2_LOG" "deps derivation no
 echo "=== Test 6: Dep caching invalidates on Cargo manifest changes ==="
 
 echo "  Modifying Cargo.toml..."
-sed -i 's/features = \["derive"\]/features = ["derive", "rc"]/' src-tauri/Cargo.toml
+replace_in_file 's/features = \["derive"\]/features = ["derive", "rc"]/' src-tauri/Cargo.toml
 commit_all "modify manifest"
 
 echo "  Rebuilding after manifest change..."
