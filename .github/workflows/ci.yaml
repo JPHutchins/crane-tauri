@@ -56,9 +56,23 @@ jobs:
           mkdir -p ci-logs
           nix flake check ./fixtures/tauri-app -L 2>&1 | tee "ci-logs/fixture-check-${{ matrix.os }}.log"
       - if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          relocation_log="ci-logs/fixture-relocation-${{ matrix.os }}.log"
+          grep 'tauri-relocate:' "ci-logs/fixture-check-${{ matrix.os }}.log" > "$relocation_log" || true
+          if [ ! -s "$relocation_log" ]; then
+            printf '%s\n' 'No tauri relocation lines captured.' > "$relocation_log"
+          fi
+      - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           path: ci-logs/fixture-check-${{ matrix.os }}.log
+          if-no-files-found: ignore
+          archive: false
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: ci-logs/fixture-relocation-${{ matrix.os }}.log
           if-no-files-found: ignore
           archive: false
 
@@ -87,9 +101,23 @@ jobs:
             fi
           done
       - if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          relocation_log="ci-logs/integration-relocation-${{ matrix.os }}.log"
+          grep 'tauri-relocate:' "ci-logs/integration-${{ matrix.os }}.log" > "$relocation_log" || true
+          if [ ! -s "$relocation_log" ]; then
+            printf '%s\n' 'No tauri relocation lines captured.' > "$relocation_log"
+          fi
+      - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
           path: ci-logs/integration-${{ matrix.os }}.log
+          if-no-files-found: ignore
+          archive: false
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: ci-logs/integration-relocation-${{ matrix.os }}.log
           if-no-files-found: ignore
           archive: false
       - if: ${{ always() }}

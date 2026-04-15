@@ -77,20 +77,41 @@ let
     ];
 
   relocateCachedTauriPaths = ''
+    derivationName="''${name:-${pname}}"
+    relocationFiles=0
+    relocationMatches=0
+    relocationRewrites=0
+
+    log_relocation() {
+      printf '%s %s\n' 'tauri-relocate:' "$*" >&2
+    }
+
     while IFS= read -r -d "" file; do
+      relocationFiles=$((relocationFiles + 1))
       while IFS= read -r oldPath; do
-        oldSourceRoot=
-        if [ -n "$oldPath" ]; then
-          oldSourceRoot="''${oldPath%/target/*}"
+        if [ -z "$oldPath" ]; then
+          continue
         fi
+
+        oldSourceRoot="''${oldPath%/target/*}"
+
+        if [ -z "$oldSourceRoot" ]; then
+          continue
+        fi
+
+        relocationMatches=$((relocationMatches + 1))
 
         if [ -n "$oldSourceRoot" ] && [ "$oldSourceRoot" != "$PWD" ] && grep -Fq "$oldSourceRoot" "$file"; then
           substituteInPlace "$file" --replace-fail "$oldSourceRoot" "$PWD"
+          relocationRewrites=$((relocationRewrites + 1))
+          log_relocation "derivation=$derivationName file=$file old_root=$oldSourceRoot new_root=$PWD"
         fi
       done < <(grep -aoE "/[^[:space:]'\"]+/source/target/[^[:space:]'\"]+" "$file" | sort -u || true)
     done < <(
       find target/release/build -type f \( -name output -o -name '*-permission-files' \) -print0 2>/dev/null || true
     )
+
+    log_relocation "derivation=$derivationName summary files=$relocationFiles matches=$relocationMatches rewrites=$relocationRewrites"
   '';
 
   sharedArgs = cleanedArgs // {
