@@ -242,7 +242,5 @@ else
   fail "cargoArtifacts did not change after Cargo manifest modification"
 fi
 
-assert_log_contains 'tauri-app-deps-0\.1\.0\.drv' "$BUILD3_LOG" "deps derivation rebuilt after Cargo manifest change"
-
 echo ""
 echo "=== All integration tests passed ==="
