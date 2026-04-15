@@ -80,7 +80,7 @@ let
     while IFS= read -r -d "" buildDir; do
       while IFS= read -r -d "" file; do
         while IFS= read -r oldPath; do
-          oldSourceRoot=''
+          oldSourceRoot=
           if [ -n "$oldPath" ]; then
             oldSourceRoot="''${oldPath%/target/*}"
           fi
