@@ -79,12 +79,17 @@ pass "frontend builds independently"
 echo "=== Test 4: Fresh consumer project builds ==="
 
 WORKDIR=$(mktemp -d)
+LIB_SNAPSHOT=$(mktemp -d)
 LOG_DIR="${CI_LOG_DIR:-$WORKDIR}"
-trap 'rm -rf "$WORKDIR"' EXIT
+trap 'rm -rf "$WORKDIR" "$LIB_SNAPSHOT"' EXIT
 mkdir -p "$LOG_DIR"
 BUILD1_LOG="$LOG_DIR/build-initial.log"
 BUILD2_LOG="$LOG_DIR/build-source-change.log"
 BUILD3_LOG="$LOG_DIR/build-manifest-change.log"
+
+for path in flake.nix lib templates; do
+  cp -r "$REPO_ROOT/$path" "$LIB_SNAPSHOT/$path"
+done
 
 for path in src public package.json package-lock.json tsconfig.json tsconfig.node.json vite.config.ts index.html; do
   cp -r "$FIXTURE/$path" "$WORKDIR/$path"
@@ -176,7 +181,7 @@ cat > "$WORKDIR/flake.nix" << 'FLAKE_NIX'
 }
 FLAKE_NIX
 
-sed -i "s|CRANE_TAURI_URL_PLACEHOLDER|path:$REPO_ROOT|" "$WORKDIR/flake.nix"
+sed -i "s|CRANE_TAURI_URL_PLACEHOLDER|path:$LIB_SNAPSHOT|" "$WORKDIR/flake.nix"
 
 cd "$WORKDIR"
 git init -q
