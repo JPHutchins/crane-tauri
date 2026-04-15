@@ -77,20 +77,20 @@ let
     ];
 
   relocateCachedTauriPaths = ''
-    while IFS= read -r -d "" buildDir; do
-      while IFS= read -r -d "" file; do
-        while IFS= read -r oldPath; do
-          oldSourceRoot=
-          if [ -n "$oldPath" ]; then
-            oldSourceRoot="''${oldPath%/target/*}"
-          fi
+    while IFS= read -r -d "" file; do
+      while IFS= read -r oldPath; do
+        oldSourceRoot=
+        if [ -n "$oldPath" ]; then
+          oldSourceRoot="''${oldPath%/target/*}"
+        fi
 
-          if [ -n "$oldSourceRoot" ] && [ "$oldSourceRoot" != "$PWD" ]; then
-            substituteInPlace "$file" --replace-fail "$oldSourceRoot" "$PWD"
-          fi
-        done < <(grep -aoE "/[^[:space:]'\"]+/source/target/[^[:space:]'\"]+" "$file" | sort -u || true)
-      done < <(grep -rIlZ "/source/target/" "$buildDir" || true)
-    done < <(find target -type d -path "*/release/build" -print0 2>/dev/null)
+        if [ -n "$oldSourceRoot" ] && [ "$oldSourceRoot" != "$PWD" ] && grep -Fq "$oldSourceRoot" "$file"; then
+          substituteInPlace "$file" --replace-fail "$oldSourceRoot" "$PWD"
+        fi
+      done < <(grep -aoE "/[^[:space:]'\"]+/source/target/[^[:space:]'\"]+" "$file" | sort -u || true)
+    done < <(
+      find target/release/build -type f \( -name output -o -name '*-permission-files' \) -print0 2>/dev/null || true
+    )
   '';
 
   sharedArgs = cleanedArgs // {
