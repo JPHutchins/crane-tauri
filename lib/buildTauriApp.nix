@@ -76,12 +76,21 @@ let
       libiconv
     ];
 
+  relocateCachedTauriPaths = ''
+    if [ -d target/release/build ]; then
+      while IFS= read -r -d "" file; do
+        substituteInPlace "$file" --replace-fail /build/source "$PWD"
+      done < <(grep -rIlZ /build/source target/release/build || true)
+    fi
+  '';
+
   sharedArgs = cleanedArgs // {
     inherit pname version;
     strictDeps = true;
     cargoExtraArgs = "--features tauri/custom-protocol ${cargoExtraArgs}";
     nativeBuildInputs = [ pkgs.pkg-config ] ++ extraNativeBuildInputs;
     buildInputs = tauriBuildInputs ++ extraBuildInputs;
+    postPatch = (cleanedArgs.postPatch or "") + relocateCachedTauriPaths;
   };
 
   commonArgs = sharedArgs // {
