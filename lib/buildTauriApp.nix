@@ -99,7 +99,10 @@ let
     cargoExtraArgs = "--features tauri/custom-protocol ${cargoExtraArgs}";
     nativeBuildInputs = [ pkgs.pkg-config ] ++ extraNativeBuildInputs;
     buildInputs = tauriBuildInputs ++ extraBuildInputs;
-    postPatch = (cleanedArgs.postPatch or "") + relocateCachedTauriPaths;
+    preConfigure = lib.concatStringsSep "\n" [
+      (cleanedArgs.preConfigure or "")
+      relocateCachedTauriPaths
+    ];
   };
 
   commonArgs = sharedArgs // {
