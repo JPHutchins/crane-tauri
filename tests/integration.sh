@@ -96,6 +96,8 @@ mkdir -p "$LOG_DIR"
 BUILD1_LOG="$LOG_DIR/build-initial.log"
 BUILD2_LOG="$LOG_DIR/build-source-change.log"
 BUILD3_LOG="$LOG_DIR/build-manifest-change.log"
+BUILD4_LOG="$LOG_DIR/build-monorepo.log"
+BUILD5_LOG="$LOG_DIR/build-monorepo-sibling-change.log"
 
 for path in flake.nix lib templates; do
   cp -r "$REPO_ROOT/$path" "$LIB_SNAPSHOT/$path"
@@ -251,6 +253,119 @@ if [ "$deps_hash_before" != "$deps_hash_after_manifest" ]; then
 else
   fail "cargoArtifacts did not change after Cargo manifest modification"
 fi
+
+echo "=== Test 7: Monorepo mode with sibling path-dep crate ==="
+
+echo "  Creating sibling crate..."
+mkdir -p sibling-crate/src
+cat > sibling-crate/Cargo.toml << 'EOF'
+[package]
+name = "sibling-crate"
+version = "0.1.0"
+edition = "2021"
+EOF
+
+cat > sibling-crate/src/lib.rs << 'EOF'
+pub fn greeting(name: &str) -> String {
+    format!("MONOREPO_SIBLING_MARKER greetings to {name}")
+}
+EOF
+
+echo "  Adding path-dep to src-tauri/Cargo.toml..."
+printf '\nsibling-crate = { path = "../sibling-crate" }\n' >> src-tauri/Cargo.toml
+
+echo "  Rewriting src-tauri/src/lib.rs to call the sibling..."
+cat > src-tauri/src/lib.rs << 'EOF'
+#[tauri::command]
+fn greet(name: &str) -> String {
+    sibling_crate::greeting(name)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![greet])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+EOF
+
+echo "  Surgically adding sibling-crate to Cargo.lock..."
+awk '
+  /^name = "tauri-app"$/ { in_tauri_app = 1 }
+  in_tauri_app && /^ "tauri",$/ {
+    print " \"sibling-crate\","
+    in_tauri_app = 0
+  }
+  { print }
+  END {
+    print ""
+    print "[[package]]"
+    print "name = \"sibling-crate\""
+    print "version = \"0.1.0\""
+  }
+' src-tauri/Cargo.lock > src-tauri/Cargo.lock.new
+mv src-tauri/Cargo.lock.new src-tauri/Cargo.lock
+
+echo "  Adding deny.toml at root for extraFileset..."
+cat > deny.toml << 'EOF'
+# Smoke-test file for extraFileset wiring.
+[graph]
+all-features = true
+EOF
+
+echo "  Updating flake.nix to set cargoRoot and extraFileset..."
+awk '
+  /src = \.\/\.;/ && !done {
+    print
+    print "          cargoRoot = ./.;"
+    print "          extraFileset = ./deny.toml;"
+    done = 1
+    next
+  }
+  { print }
+' flake.nix > flake.nix.new
+mv flake.nix.new flake.nix
+
+commit_all "convert to monorepo"
+
+echo "  Building in monorepo mode..."
+capture_verbose "$BUILD4_LOG" nix build "${NIX_BUILD_ARGS[@]}" .#default
+
+monorepo_out=$(run_verbose nix path-info .#default)
+test -x "$monorepo_out/bin/tauri-app" || fail "monorepo binary not found"
+pass "monorepo build with sibling path-dep produces an executable binary"
+
+grep -qc "MONOREPO_SIBLING_MARKER" "$monorepo_out/bin/tauri-app" \
+  || fail "sibling-crate marker string not found in binary — sibling not linked?"
+pass "sibling-crate compiled and linked into the tauri binary"
+
+deps_hash_monorepo=$(cargo_artifacts_out_path)
+
+echo "=== Test 8: Sibling crate source edits don't bust the deps cache ==="
+
+echo "  Modifying sibling-crate source (not its manifest)..."
+replace_in_file 's/MONOREPO_SIBLING_MARKER/MONOREPO_SIBLING_MARKER_v2/' sibling-crate/src/lib.rs
+commit_all "modify sibling source"
+
+echo "  Rebuilding after sibling source change..."
+capture_verbose "$BUILD5_LOG" nix build "${NIX_BUILD_ARGS[@]}" .#default
+
+deps_hash_after_sibling=$(cargo_artifacts_out_path)
+
+if [ "$deps_hash_monorepo" = "$deps_hash_after_sibling" ]; then
+  pass "cargoArtifacts unchanged after sibling .rs change ($deps_hash_monorepo)"
+else
+  fail "cargoArtifacts changed on sibling .rs edit: before=$deps_hash_monorepo after=$deps_hash_after_sibling"
+fi
+
+assert_log_lacks 'tauri-app-deps-0\.1\.0\.drv' "$BUILD5_LOG" "deps derivation not rebuilt after sibling .rs change"
+
+monorepo_out_after_sibling=$(run_verbose nix path-info .#default)
+grep -qc "MONOREPO_SIBLING_MARKER_v2" "$monorepo_out_after_sibling/bin/tauri-app" \
+  || fail "updated sibling marker not found in rebuilt binary"
+pass "rebuilt binary picks up the sibling source edit"
 
 echo ""
 echo "=== All integration tests passed ==="
