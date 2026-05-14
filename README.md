@@ -178,6 +178,18 @@ tauri = crane-tauri.lib.buildTauriApp { inherit pkgs craneLib; } {
   );
   ```
 
+  If a caller passes their own `--manifest-path` via `cargoExtraArgs` to
+  `buildTauriApp` (unusual but valid for an exotic layout), injection is
+  skipped so the caller's flag wins.
+
+- **`cargoRoot` and `src` must share the same on-disk root**: the
+  monorepo-detection check compares `toString`-evaluated paths. If `src` is
+  a store path (e.g. from `fetchFromGitHub`) and `cargoRoot` is a local
+  source path (or vice versa) the prefix check fails and the build is
+  rejected with a clear error. Derive `cargoRoot` from `src`
+  (e.g. `cargoRoot = src;`) when the project doesn't live at a fixed local
+  path.
+
 - **No automatic GTK wrapping**: the lib still leaves binary wrapping
   (`wrapGAppsHook3`, etc.) to consumers in a separate derivation. Adding it
   to the shared inputs perturbs `PKG_CONFIG_PATH` and invalidates every

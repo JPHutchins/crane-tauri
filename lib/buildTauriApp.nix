@@ -18,7 +18,10 @@
   # tauri project depends on via `{ path = "..." }`. Defaults to
   # `${src}/src-tauri`. Pick the tightest ancestor that covers the path deps —
   # widening to the whole repo pulls every Cargo.toml/*.rs in the tree into
-  # the build inputs and inflates the deps cache.
+  # the build inputs and inflates the deps cache. Must share the same on-disk
+  # root as `src` (i.e. derive from `src` or from the same source tree); a
+  # mix of a store-path `src` and a local-path `cargoRoot` (or vice versa)
+  # will be rejected because the two paths can't be safely related.
   cargoRoot ? null,
   # Additional fileset entries unioned into the app source only, not the deps
   # source. Use for non-manifest inputs the app needs at compile time (SQL
@@ -52,13 +55,22 @@ let
   # if a caller sets cargoRoot to something that isn't an ancestor of
   # ${src}/src-tauri — otherwise `lib.removePrefix` would silently return the
   # full absolute path and the build would fail confusingly downstream.
+  # The compared strings are `toString`-evaluated absolute paths, so `src`
+  # and `cargoRoot` must share the same on-disk root (both local paths or
+  # both from the same store derivation). Mixing a store-path `src` with a
+  # local `cargoRoot` (or vice versa) will hit this branch.
   tauriSubdir =
     if !isMonorepo then
       "."
     else if lib.hasPrefix (toString actualCargoRoot + "/") (toString tauriSrc) then
       lib.removePrefix (toString actualCargoRoot + "/") (toString tauriSrc)
     else
-      throw "buildTauriApp: ${toString tauriSrc} is not under cargoRoot (${toString actualCargoRoot}). Set cargoRoot to a directory that contains src-tauri/.";
+      throw ''
+        buildTauriApp: ${toString tauriSrc} is not under cargoRoot (${toString actualCargoRoot}).
+        Set cargoRoot to a directory that contains src-tauri/. If src and
+        cargoRoot come from different roots (e.g. one is a store path and
+        the other is a local path), derive cargoRoot from src instead
+        (e.g. `cargoRoot = src;`).'';
 
   cargoSources = craneLib.fileset.commonCargoSources actualCargoRoot;
 
@@ -153,7 +165,14 @@ let
   # carry two flavors of extra args. Consumers composing `commonArgs` with a
   # tool that also rejects --manifest-path (e.g. cargo-deny) should compose
   # their own args using the returned `tauriSubdir`.
-  manifestPathArg = lib.optionalString isMonorepo "--manifest-path ${tauriSubdir}/Cargo.toml";
+  #
+  # If the caller already supplied --manifest-path via `cargoExtraArgs` we
+  # skip injection — otherwise cargo would see two flags and silently use the
+  # last one (ours), overriding the caller's choice.
+  callerSetManifestPath = lib.hasInfix "--manifest-path" cargoExtraArgs;
+  manifestPathArg = lib.optionalString (
+    isMonorepo && !callerSetManifestPath
+  ) "--manifest-path ${tauriSubdir}/Cargo.toml";
 
   tauriBuildCargoExtraArgs = lib.concatStringsSep " " (
     lib.filter (s: s != "") [
