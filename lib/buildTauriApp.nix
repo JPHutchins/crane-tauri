@@ -126,26 +126,24 @@ let
     );
   };
 
-  tauriBuildInputs =
-    with pkgs;
-    [
-      openssl
-    ]
-    ++ lib.optionals stdenv.hostPlatform.isLinux [
-      webkitgtk_4_1
-      libsoup_3
-      gtk3
-      glib
-      cairo
-      pango
-      gdk-pixbuf
-      atk
-      librsvg
-      libayatana-appindicator
-    ]
-    ++ lib.optionals stdenv.hostPlatform.isDarwin [
-      libiconv
-    ];
+  tauriBuildInputs = [
+    pkgs.openssl
+  ]
+  ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+    pkgs.webkitgtk_4_1
+    pkgs.libsoup_3
+    pkgs.gtk3
+    pkgs.glib
+    pkgs.cairo
+    pkgs.pango
+    pkgs.gdk-pixbuf
+    pkgs.atk
+    pkgs.librsvg
+    pkgs.libayatana-appindicator
+  ]
+  ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
+    pkgs.libiconv
+  ];
 
   relocateCachedTauriPaths = ''
     derivationName="''${name:-${pname}}"
