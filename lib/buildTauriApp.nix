@@ -176,7 +176,7 @@ let
 
         relocationMatches=$((relocationMatches + 1))
 
-        if [ -n "$oldSourceRoot" ] && [ "$oldSourceRoot" != "$PWD" ] && grep -Fq "$oldSourceRoot" "$file"; then
+        if [ "$oldSourceRoot" != "$PWD" ] && grep -Fq "$oldSourceRoot" "$file"; then
           substituteInPlace "$file" --replace-fail "$oldSourceRoot" "$PWD"
           relocationRewrites=$((relocationRewrites + 1))
           log_relocation "derivation=$derivationName file=$file old_root=$oldSourceRoot new_root=$PWD"
