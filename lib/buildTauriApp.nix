@@ -34,6 +34,13 @@
 let
   inherit (pkgs) lib;
 
+  # The attrs this lib consumes itself, stripped so they don't leak into crane's
+  # derivations. Must stay in sync with the named formals above (minus
+  # pname/version/src, which crane needs and we forward). nativeBuildInputs and
+  # buildInputs are removed here and merged back in `sharedArgs` so a caller
+  # value is appended to ours instead of silently overriding it. The phase hooks
+  # are lib-owned (the app sets them explicitly); stripping them keeps a caller
+  # value from silently taking effect in only the deps build.
   cleanedArgs = builtins.removeAttrs origArgs [
     "frontend"
     "binaryName"
@@ -44,6 +51,11 @@ let
     "extraTauriConfig"
     "cargoRoot"
     "extraFileset"
+    "nativeBuildInputs"
+    "buildInputs"
+    "buildPhaseCargoCommand"
+    "installPhaseCommand"
+    "doInstallCargoArtifacts"
   ];
 
   tauriSrc = src + "/src-tauri";
@@ -170,24 +182,27 @@ let
   # skip injection — otherwise cargo would see two flags and silently use the
   # last one (ours), overriding the caller's choice.
   callerSetManifestPath = lib.hasInfix "--manifest-path" cargoExtraArgs;
+  # Escape the path so a space or shell metachar in an intermediate directory
+  # (cargoRoot..src-tauri) survives crane's unquoted interpolation of
+  # cargoExtraArgs into its build command. escapeShellArg is a no-op for an
+  # ordinary `src-tauri/Cargo.toml`, so the emitted string is unchanged for the
+  # common case.
   manifestPathArg = lib.optionalString (
     isMonorepo && !callerSetManifestPath
-  ) "--manifest-path ${tauriSubdir}/Cargo.toml";
+  ) "--manifest-path ${lib.escapeShellArg "${tauriSubdir}/Cargo.toml"}";
 
-  tauriBuildCargoExtraArgs = lib.concatStringsSep " " (
-    lib.filter (s: s != "") [
-      "--features tauri/custom-protocol"
-      cargoExtraArgs
-    ]
-  );
+  joinArgs = parts: lib.concatStringsSep " " (lib.filter (s: s != "") parts);
 
-  sharedCargoExtraArgs = lib.concatStringsSep " " (
-    lib.filter (s: s != "") [
-      "--features tauri/custom-protocol"
-      cargoExtraArgs
-      manifestPathArg
-    ]
-  );
+  # The two flavors differ only by the injected --manifest-path: `cargo tauri
+  # build` rejects it, every other cargo command run from cargoRoot needs it.
+  baseCargoExtraArgs = [
+    "--features tauri/custom-protocol"
+    cargoExtraArgs
+  ];
+
+  tauriBuildCargoExtraArgs = joinArgs baseCargoExtraArgs;
+
+  sharedCargoExtraArgs = joinArgs (baseCargoExtraArgs ++ [ manifestPathArg ]);
 
   # Pin crane's vendoring to the tauri crate's own Cargo.lock when one exists
   # there. In a "loose path-deps" layout each crate carries its own lockfile,
@@ -220,8 +235,12 @@ let
       inherit pname version;
       strictDeps = true;
       cargoExtraArgs = sharedCargoExtraArgs;
-      nativeBuildInputs = [ pkgs.pkg-config ] ++ extraNativeBuildInputs;
-      buildInputs = tauriBuildInputs ++ extraBuildInputs;
+      nativeBuildInputs = [
+        pkgs.pkg-config
+      ]
+      ++ (origArgs.nativeBuildInputs or [ ])
+      ++ extraNativeBuildInputs;
+      buildInputs = tauriBuildInputs ++ (origArgs.buildInputs or [ ]) ++ extraBuildInputs;
       preConfigure = lib.concatStringsSep "\n" [
         exportAbsoluteCargoTargetDir
         (cleanedArgs.preConfigure or "")
