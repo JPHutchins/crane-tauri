@@ -18,6 +18,11 @@
   cargoArtifacts ? null,
   extraBuildInputs ? [ ],
   extraNativeBuildInputs ? [ ],
+  # Cargo features passed as `--features` to every cargo invocation. Defaults to
+  # the custom-protocol feature that Tauri v2 release builds require; override to
+  # add features, or set to [ ] to omit the flag entirely (e.g. when features are
+  # driven from Cargo.toml).
+  tauriFeatures ? [ "tauri/custom-protocol" ],
   # Extra tauri.conf.json keys, deep-merged OVER the managed config (caller
   # wins). The lib manages `build.frontendDist` (set to the `frontend`
   # derivation) and `build.beforeBuildCommand` (cleared); setting either of those
@@ -62,6 +67,7 @@ let
     "cargoArtifacts"
     "extraBuildInputs"
     "extraNativeBuildInputs"
+    "tauriFeatures"
     "extraTauriConfig"
     "cargoRoot"
     "extraFileset"
@@ -205,10 +211,14 @@ let
 
   joinArgs = parts: lib.concatStringsSep " " (lib.filter (s: s != "") parts);
 
+  tauriFeaturesArg = lib.optionalString (
+    tauriFeatures != [ ]
+  ) "--features ${lib.concatStringsSep "," tauriFeatures}";
+
   # The two flavors differ only by the injected --manifest-path: `cargo tauri
   # build` rejects it, every other cargo command run from cargoRoot needs it.
   baseCargoExtraArgs = [
-    "--features tauri/custom-protocol"
+    tauriFeaturesArg
     cargoExtraArgs
   ];
 
