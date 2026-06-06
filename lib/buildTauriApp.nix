@@ -8,11 +8,21 @@
   version,
   src,
   frontend,
+  # Name of the compiled binary to install from target/release. Defaults to
+  # pname, but pname is the *Nix* package name while the on-disk binary is named
+  # by cargo (`[package].name` / `[[bin]]` in src-tauri/Cargo.toml). Set this
+  # explicitly whenever pname differs from the cargo bin name, otherwise the
+  # install phase fails late with "failed to locate built binary".
   binaryName ? pname,
   cargoExtraArgs ? "",
   cargoArtifacts ? null,
   extraBuildInputs ? [ ],
   extraNativeBuildInputs ? [ ],
+  # Extra tauri.conf.json keys, deep-merged OVER the managed config (caller
+  # wins). The lib manages `build.frontendDist` (set to the `frontend`
+  # derivation) and `build.beforeBuildCommand` (cleared); setting either of those
+  # here overrides them and decouples the embedded assets from `frontend`, so
+  # don't.
   extraTauriConfig ? { },
   # Closest common ancestor of `${src}/src-tauri` and any sibling crates the
   # tauri project depends on via `{ path = "..." }`. Defaults to
@@ -24,9 +34,12 @@
   # will be rejected because the two paths can't be safely related.
   cargoRoot ? null,
   # Additional fileset entries unioned into the app source only, not the deps
-  # source. Use for non-manifest inputs the app needs at compile time (SQL
-  # migrations, fixtures); keeping them out of depsSrc preserves the deps
-  # cache across content-only edits.
+  # source. Use for non-manifest, non-`.toml` inputs the app needs at compile
+  # time (SQL migrations, JSON fixtures); keeping them out of depsSrc preserves
+  # the deps cache across content-only edits. NOTE: `.toml` files anywhere under
+  # cargoRoot are always in BOTH sources (crane's commonCargoSources keeps every
+  # `.toml` for cargo tooling), so editing one still busts the deps cache and
+  # passing one here has no effect.
   extraFileset ? null,
   ...
 }@origArgs:
@@ -304,9 +317,11 @@ in
     commonArgs
     tauriConfig
     # Path of the tauri crate relative to cargoRoot ("." outside monorepo
-    # mode). Exposed so consumers can compose their own cargo args when a
-    # tool doesn't accept the injected --manifest-path (e.g. cargo-deny):
-    #   cargoExtraArgs = "--features tauri/custom-protocol --manifest-path ${tauri.tauriSubdir}/Cargo.toml"
+    # mode). Exposed so consumers can target the tauri crate from cargoRoot.
+    # cargo-deny runs as `cargo deny check` and finds the manifest from CWD, so
+    # it wants `cargoExtraArgs = ""` — the top-level `cargo` invocation rejects
+    # --features/--manifest-path. Use cargoDenyExtraArgs (or tauriSubdir) if you
+    # must point it at the tauri crate explicitly.
     tauriSubdir
     ;
   cargoArtifacts = resolvedCargoArtifacts;
