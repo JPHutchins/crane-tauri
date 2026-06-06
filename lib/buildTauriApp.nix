@@ -47,13 +47,14 @@
 let
   inherit (pkgs) lib;
 
-  # The attrs this lib consumes itself, stripped so they don't leak into crane's
-  # derivations. Must stay in sync with the named formals above (minus
-  # pname/version/src, which crane needs and we forward). nativeBuildInputs and
-  # buildInputs are removed here and merged back in `sharedArgs` so a caller
-  # value is appended to ours instead of silently overriding it. The phase hooks
-  # are lib-owned (the app sets them explicitly); stripping them keeps a caller
-  # value from silently taking effect in only the deps build.
+  # The attrs this lib consumes or overrides itself, stripped so they don't leak
+  # into crane's derivations: the named formals above (minus pname/version/src,
+  # which crane needs and we forward) plus the build-input and phase-hook attrs
+  # set in `sharedArgs`. nativeBuildInputs and buildInputs are removed here and
+  # merged back in so a caller value is appended to ours instead of silently
+  # overriding it; the phase hooks are lib-owned (the app sets them explicitly),
+  # and stripping them keeps a caller value from taking effect in only the deps
+  # build.
   cleanedArgs = builtins.removeAttrs origArgs [
     "frontend"
     "binaryName"
