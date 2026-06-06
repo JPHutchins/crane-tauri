@@ -23,11 +23,11 @@
   # add features, or set to [ ] to omit the flag entirely (e.g. when features are
   # driven from Cargo.toml).
   tauriFeatures ? [ "tauri/custom-protocol" ],
-  # Extra tauri.conf.json keys, deep-merged OVER the managed config (caller
-  # wins). The lib manages `build.frontendDist` (set to the `frontend`
-  # derivation) and `build.beforeBuildCommand` (cleared); setting either of those
-  # here overrides them and decouples the embedded assets from `frontend`, so
-  # don't.
+  # Extra tauri.conf.json keys, deep-merged with the managed config. The lib
+  # manages `build.frontendDist` (set to the `frontend` derivation) and
+  # `build.beforeBuildCommand` (cleared), and those managed keys WIN over values
+  # set here, so the embedded assets always track `frontend`. All other keys
+  # (including other `build.*` keys) are caller-controlled.
   extraTauriConfig ? { },
   # Closest common ancestor of `${src}/src-tauri` and any sibling crates the
   # tauri project depends on via `{ path = "..." }`. Defaults to
@@ -281,12 +281,12 @@ let
       craneLib.buildDepsOnly (sharedArgs // { src = depsSrc; });
 
   tauriConfig = builtins.toJSON (
-    lib.recursiveUpdate {
+    lib.recursiveUpdate extraTauriConfig {
       build = {
         frontendDist = "${frontend}";
         beforeBuildCommand = "";
       };
-    } extraTauriConfig
+    }
   );
 
   app = craneLib.mkCargoDerivation (
