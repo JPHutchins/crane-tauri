@@ -1,0 +1,9 @@
+{
+  "_comment": "USD per 1,000,000 tokens. PRICES DRIFT — keep _updated current. cost = sum over models of (input*in + output*out + cache_read*cache_read + cache_write*cache_write) / 1e6. The CLI's vendor_cost_usd is vendor-priced and will be wrong for non-Anthropic backends; recompute from this map using the `models` array in the abstract result envelope (SPEC §6.1). Fill the zeros from your provider's pricing page.",
+  "_updated": "2026-07-05",
+  "_unit": "USD per 1M tokens",
+  "models": {
+    "deepseek-v4-pro": { "in": 0.435, "out": 0.87, "cache_read": 0.003625, "cache_write": 0.0 },
+    "deepseek-v4-flash": { "in": 0.14, "out": 0.28, "cache_read": 0.0028, "cache_write": 0.0 }
+  }
+}
