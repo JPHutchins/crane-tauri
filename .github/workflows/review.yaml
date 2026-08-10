@@ -1,0 +1,40 @@
+name: Code review
+
+on:
+  workflow_run:
+    workflows: ["CI"]       # our CI workflow name — unmodified
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  issues: write
+  checks: write
+
+jobs:
+  review:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      (github.event.workflow_run.conclusion == 'success' ||
+       github.event.workflow_run.conclusion == 'failure')
+    uses: JPHutchins/code-review/.github/workflows/review-reusable.yaml@v0.1.0-alpha.40
+    with:
+      head_sha:      ${{ github.event.workflow_run.head_sha }}
+      head_branch:   ${{ github.event.workflow_run.head_branch }}
+      head_repo:     ${{ github.event.workflow_run.head_repository.full_name }}
+      run_id:        ${{ github.event.workflow_run.id }}
+      conclusion:    ${{ github.event.workflow_run.conclusion }}
+      trigger_event: ${{ github.event.workflow_run.event }}
+      api_base_url:  ${{ vars.API_BASE_URL }}
+      model_full:    deepseek-v4-flash
+      model_mechanic: deepseek-v4-flash
+      scope:         ${{ vars.SCOPE }}   # empty ⇒ the reviewer infers scope from the README's first paragraph (#139)
+      mechanic_time_limit: 3m
+      mechanic_grace_period: 90s
+      mechanic_usd_limit: "0.10"
+      full_review_time_limit: 24m
+      full_review_grace_period: 12m
+      full_review_usd_limit: "0.50"
+    secrets:
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
