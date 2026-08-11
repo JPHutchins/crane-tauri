@@ -409,5 +409,76 @@ grep -qaF "EXTRA_FILESET_MARKER_v2" "$extrafileset_out/bin/tauri-app" \
   || fail "updated extraFileset marker not found in rebuilt binary"
 pass "rebuilt binary picks up the extraFileset content edit"
 
+echo "=== Test 10: craneArgs phase keys never reach the deps derivation ==="
+
+# Evaluation only — no build. Runs last because it leaves the consumer flake with
+# a deliberately broken app build phase.
+
+echo "  Adding craneArgs phase overrides to flake.nix..."
+awk '
+  /extraFileset = \.\/migrations;/ && !done {
+    print
+    print "          craneArgs = {"
+    print "            buildPhase = \"echo SENTINEL_BUILD_PHASE\";"
+    print "            buildPhaseCargoCommand = \"echo SENTINEL_CARGO_COMMAND\";"
+    print "            installPhaseCommand = \"echo SENTINEL_INSTALL_COMMAND\";"
+    print "          };"
+    done = 1
+    next
+  }
+  { print }
+  END {
+    if (!done) {
+      print "ERROR: did not find the extraFileset anchor to insert craneArgs after" > "/dev/stderr"
+      exit 1
+    }
+  }
+' flake.nix > flake.nix.new
+mv flake.nix.new flake.nix
+commit_all "add craneArgs phase overrides"
+
+drv_env() {
+  jq -r --arg name "$1" --arg attr "$2" \
+    'to_entries[] | select(.value.env.name == $name) | .value.env[$attr] // ""'
+}
+
+derivations_json=$(run_verbose nix derivation show -r .#default)
+
+app_build_phase=$(printf '%s' "$derivations_json" | drv_env "tauri-app-0.1.0" buildPhase)
+deps_build_phase=$(printf '%s' "$derivations_json" | drv_env "tauri-app-deps-0.1.0" buildPhase)
+deps_install_phase=$(printf '%s' "$derivations_json" | drv_env "tauri-app-deps-0.1.0" installPhase)
+
+# Anchors the selector: if crane ever renames the deps derivation, or the phase
+# attributes stop being plain env vars, these fail loudly instead of letting the
+# SENTINEL checks below pass vacuously against empty strings.
+if [ -n "$deps_build_phase" ] && [ -n "$deps_install_phase" ]; then
+  pass "deps derivation phases are readable from the derivation graph"
+else
+  fail "could not read phases for 'tauri-app-deps-0.1.0' — update the selector in Test 10"
+fi
+
+# Proves craneArgs still reaches the app, so the SENTINEL checks below are
+# testing that the deps args were filtered, not that nothing was passed at all.
+case "$app_build_phase" in
+*SENTINEL_BUILD_PHASE*)
+  pass "craneArgs still reaches the app derivation" ;;
+*)
+  fail "craneArgs.buildPhase did not reach the app derivation: $app_build_phase" ;;
+esac
+
+case "$deps_build_phase" in
+*cargoWithProfile*)
+  pass "deps derivation still runs crane's own build command" ;;
+*)
+  fail "deps buildPhase is not crane's default: $deps_build_phase" ;;
+esac
+
+case "$deps_build_phase$deps_install_phase" in
+*SENTINEL_*)
+  fail "craneArgs phase keys leaked into the deps derivation: $deps_build_phase $deps_install_phase" ;;
+*)
+  pass "no craneArgs phase key reached the deps derivation" ;;
+esac
+
 echo ""
 echo "=== All integration tests passed ==="

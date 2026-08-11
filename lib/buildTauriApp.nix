@@ -322,11 +322,32 @@ let
     src = appSrc;
   };
 
+  # Keys that describe how to build and install the *app*. They must not reach
+  # buildDepsOnly: crane honors a caller-supplied buildPhaseCargoCommand /
+  # installPhaseCommand there, and mkCargoDerivation honors buildPhase /
+  # installPhase ahead of either. Left in sharedArgs they replace the dependency
+  # build with the app's commands, so the deps derivation succeeds having
+  # compiled nothing and the cache it publishes is empty.
+  appOnlyCraneKeys = [
+    "buildPhase"
+    "buildPhaseCargoCommand"
+    "checkPhase"
+    "checkPhaseCargoCommand"
+    "doInstallCargoArtifacts"
+    "fixupPhase"
+    "installPhase"
+    "installPhaseCommand"
+    "meta"
+    "outputs"
+    "postInstall"
+    "preFixup"
+  ];
+
   resolvedCargoArtifacts =
     if cargoArtifacts != null then
       cargoArtifacts
     else
-      craneLib.buildDepsOnly (sharedArgs // { src = depsSrc; });
+      craneLib.buildDepsOnly ((builtins.removeAttrs sharedArgs appOnlyCraneKeys) // { src = depsSrc; });
 
   tauriConfig = builtins.toJSON (
     lib.recursiveUpdate extraTauriConfig {
