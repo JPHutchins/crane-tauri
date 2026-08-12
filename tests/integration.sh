@@ -412,7 +412,7 @@ pass "rebuilt binary picks up the extraFileset content edit"
 echo "=== Test 10: craneArgs phase keys never reach the deps derivation ==="
 
 # Evaluation only — no build. Runs last because it leaves the consumer flake with
-# a deliberately broken app build phase.
+# a deliberately broken app build.
 
 echo "  Adding craneArgs phase overrides to flake.nix..."
 awk '
@@ -422,6 +422,9 @@ awk '
     print "            buildPhase = \"echo SENTINEL_BUILD_PHASE\";"
     print "            buildPhaseCargoCommand = \"echo SENTINEL_CARGO_COMMAND\";"
     print "            installPhaseCommand = \"echo SENTINEL_INSTALL_COMMAND\";"
+    print "            checkPhaseCargoCommand = \"echo SENTINEL_CHECK_COMMAND\";"
+    print "            buildCommand = \"echo SENTINEL_BUILD_COMMAND\";"
+    print "            phases = \"unpackPhase patchPhase installPhase\";"
     print "          };"
     done = 1
     next
@@ -437,36 +440,39 @@ awk '
 mv flake.nix.new flake.nix
 commit_all "add craneArgs phase overrides"
 
+# Read one named flake output rather than the whole recursive closure: it avoids
+# materialising every derivation the app depends on, and it anchors the deps
+# derivation by its flake attr instead of a hard-coded name/version string.
+#
 # Nix 2.35 wraps `derivation show` output as {version, derivations}; 2.28 emits
-# the bare drvPath->derivation map. Accept either, and skip non-object values so
-# a future top-level scalar cannot crash jq under `set -e` before the guard below
-# gets a chance to report a readable failure.
+# the bare drvPath->derivation map. `(.derivations // .)` accepts either, and the
+# two `error` branches turn a further shape change into a readable message rather
+# than a jq stack trace, since `set -e` aborts on either.
 drv_env() {
-  jq -r --arg name "$1" --arg attr "$2" \
-    '(.derivations // .)
-     | to_entries[]
-     | select((.value | type) == "object")
-     | select((.value.env.name // "") == $name)
-     | .value.env[$attr] // ""'
+  run_verbose nix derivation show ".#$1" | jq -r --arg attr "$2" '
+    (if type == "object" then . else error("derivation show did not return an object") end)
+    | (.derivations // .)
+    | to_entries
+    | (if length == 1 then . else error("expected exactly 1 derivation, got \(length)") end)
+    | .[0].value.env[$attr] // ""'
 }
 
-derivations_json=$(run_verbose nix derivation show -r .#default)
+app_build_phase=$(drv_env default buildPhase)
+deps_build_phase=$(drv_env cargoArtifacts buildPhase)
+deps_install_phase=$(drv_env cargoArtifacts installPhase)
+deps_leaked_stdenv=$(drv_env cargoArtifacts buildCommand)$(drv_env cargoArtifacts phases)
 
-app_build_phase=$(printf '%s' "$derivations_json" | drv_env "tauri-app-0.1.0" buildPhase)
-deps_build_phase=$(printf '%s' "$derivations_json" | drv_env "tauri-app-deps-0.1.0" buildPhase)
-deps_install_phase=$(printf '%s' "$derivations_json" | drv_env "tauri-app-deps-0.1.0" installPhase)
-
-# Anchors the selector: if crane ever renames the deps derivation, or the phase
-# attributes stop being plain env vars, these fail loudly instead of letting the
-# SENTINEL checks below pass vacuously against empty strings.
+# Anchors the reader: if the phase attributes stop being plain env vars these fail
+# loudly instead of letting the SENTINEL checks below pass vacuously against empty
+# strings.
 if [ -n "$deps_build_phase" ] && [ -n "$deps_install_phase" ]; then
   pass "deps derivation phases are readable from the derivation graph"
 else
-  fail "could not read phases for 'tauri-app-deps-0.1.0' — update the selector in Test 10"
+  fail "could not read phases for the deps derivation — update drv_env in Test 10"
 fi
 
-# Proves craneArgs still reaches the app, so the SENTINEL checks below are
-# testing that the deps args were filtered, not that nothing was passed at all.
+# Proves craneArgs still reaches the app, so the SENTINEL checks below are testing
+# that the deps args were filtered, not that nothing was passed at all.
 case "$app_build_phase" in
 *SENTINEL_BUILD_PHASE*)
   pass "craneArgs still reaches the app derivation" ;;
@@ -487,6 +493,14 @@ case "$deps_build_phase$deps_install_phase" in
 *)
   pass "no craneArgs phase key reached the deps derivation" ;;
 esac
+
+# stdenv honors buildCommand and phases ahead of the phase list, so a leak here
+# skips the dependency build entirely while still publishing its artifacts cache.
+if [ -z "$deps_leaked_stdenv" ]; then
+  pass "no stdenv build-skipping key reached the deps derivation"
+else
+  fail "buildCommand/phases leaked into the deps derivation: $deps_leaked_stdenv"
+fi
 
 echo ""
 echo "=== All integration tests passed ==="

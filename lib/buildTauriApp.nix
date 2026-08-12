@@ -328,7 +328,13 @@ let
   # installPhase ahead of either. Left in sharedArgs they replace the dependency
   # build with the app's commands, so the deps derivation succeeds having
   # compiled nothing and the cache it publishes is empty.
+  # buildCommand, buildCommandPath and phases are the stdenv-level equivalents:
+  # genericBuild sources/evals the first two and returns before the phase list is
+  # ever built, and phases can simply omit buildPhase — so any of them replaces
+  # the dependency build just as effectively as the crane-level keys above.
   appOnlyCraneKeys = [
+    "buildCommand"
+    "buildCommandPath"
     "buildPhase"
     "buildPhaseCargoCommand"
     "checkPhase"
@@ -339,6 +345,7 @@ let
     "installPhaseCommand"
     "meta"
     "outputs"
+    "phases"
     "postInstall"
     "preFixup"
   ];
