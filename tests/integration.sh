@@ -437,9 +437,17 @@ awk '
 mv flake.nix.new flake.nix
 commit_all "add craneArgs phase overrides"
 
+# Nix 2.35 wraps `derivation show` output as {version, derivations}; 2.28 emits
+# the bare drvPath->derivation map. Accept either, and skip non-object values so
+# a future top-level scalar cannot crash jq under `set -e` before the guard below
+# gets a chance to report a readable failure.
 drv_env() {
   jq -r --arg name "$1" --arg attr "$2" \
-    'to_entries[] | select(.value.env.name == $name) | .value.env[$attr] // ""'
+    '(.derivations // .)
+     | to_entries[]
+     | select((.value | type) == "object")
+     | select((.value.env.name // "") == $name)
+     | .value.env[$attr] // ""'
 }
 
 derivations_json=$(run_verbose nix derivation show -r .#default)
