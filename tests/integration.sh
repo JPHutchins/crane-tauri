@@ -448,9 +448,13 @@ case "$SYSTEM" in
 *-darwin)
   pass "wrappedApp passes the app through unchanged on darwin" ;;
 *)
-  head -c 2 "$wrapped_out/bin/tauri-app" | grep -q '^#!' || fail "wrappedApp binary is not a wrapper script"
+  # makeWrapper emits a compiled shim (an ELF, not a shell script) that embeds
+  # the environment it sets, and moves the real binary to .tauri-app-wrapped —
+  # assert on the semantics, not the file type.
+  grep -qaFR "WEBKIT_GST_ALLOWED_URI_PROTOCOLS" "$wrapped_out/bin/tauri-app" \
+    || fail "wrappedApp wrapper does not set the gstreamer env"
   grep -qaFR "vite.svg" "$wrapped_out/bin/" || fail "wrappedApp binary lost the embedded frontend marker"
-  pass "wrappedApp binary is a wrapper script around the real ELF" ;;
+  pass "wrappedApp wraps the real ELF with the GApps environment" ;;
 esac
 
 echo "=== Test 11: tauriBuild/tauriInstall closures replace the defaults ==="
