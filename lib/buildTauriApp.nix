@@ -495,6 +495,47 @@ let
       doInstallCargoArtifacts = false;
     }
   );
+
+  # wrapGAppsHook3 must not enter the cargo builds (its propagated
+  # gobject-introspection inputs can perturb PKG_CONFIG_PATH for -sys crates),
+  # so the wrapper is a separate derivation around the app (#12). It assembles
+  # the runtime lookup paths the bare binary only finds by accident today:
+  # GDK_PIXBUF_MODULE_FILE, GSETTINGS_SCHEMAS_PATH/XDG_DATA_DIRS (glib/gtk3),
+  # GIO_EXTRA_MODULES (glib-networking — TLS in the webview), and the tauri
+  # gstreamer prefixes from the fixupScript. Darwin passes the app through
+  # unchanged.
+  wrappedApp =
+    if !pkgs.stdenv.hostPlatform.isLinux then
+      app
+    else
+      pkgs.stdenv.mkDerivation {
+        inherit pname version;
+        dontUnpack = true;
+        strictDeps = true;
+        nativeBuildInputs = [ pkgs.wrapGAppsHook3 ];
+        buildInputs = [
+          pkgs.webkitgtk_4_1
+          pkgs.gtk3
+          pkgs.glib
+          pkgs.gdk-pixbuf
+          pkgs.librsvg
+          pkgs.glib-networking
+        ];
+        installPhase = ''
+          runHook preInstall
+          mkdir -p $out/bin
+          cp ${app}/bin/${binaryName} $out/bin/${binaryName}
+          chmod +w $out/bin/${binaryName}
+          runHook postInstall
+        '';
+        preFixup = ''
+          gappsWrapperArgs+=(
+            --prefix WEBKIT_GST_ALLOWED_URI_PROTOCOLS : "asset"
+            --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : "${pkgs.cargo-tauri.gst-plugin}/lib/gstreamer-1.0/"
+            --set-default __NV_DISABLE_EXPLICIT_SYNC 1
+          )
+        '';
+      };
 in
 {
   inherit
