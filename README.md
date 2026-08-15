@@ -113,6 +113,12 @@ nix flake init -t github:JPHutchins/crane-tauri
 - to add system dependencies, pass `extraNativeBuildInputs` / `extraBuildInputs`
   (appended to `pkg-config` and the Tauri system libraries); other crane /
   `mkDerivation` args go via `craneArgs`
+- phase/install-shaping `craneArgs` keys (`buildPhase`, `installPhase*`,
+  `checkPhase*`, `buildCommand`, `phases`, `dont*`, ...) are stripped before
+  the deps build and from `tauri.commonArgs`, so they cannot replace the
+  dependency build or hollow out a composed check; customise the deps build
+  via `cargoArtifactsArgs`, which is applied to `buildDepsOnly` and honors
+  crane's `buildPhaseCargoCommand` there
 - `tauri/custom-protocol` is injected by default (required for Tauri v2 release
   builds); override the feature set via `tauriFeatures`, and your
   `cargoExtraArgs` is appended

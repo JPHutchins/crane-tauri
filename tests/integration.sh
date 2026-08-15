@@ -409,5 +409,190 @@ grep -qaF "EXTRA_FILESET_MARKER_v2" "$extrafileset_out/bin/tauri-app" \
   || fail "updated extraFileset marker not found in rebuilt binary"
 pass "rebuilt binary picks up the extraFileset content edit"
 
+echo "=== Test 10: craneArgs phase keys never reach the deps derivation ==="
+
+# Evaluation only — no build. Runs last because it leaves the consumer flake with
+# a deliberately broken app build.
+
+echo "  Adding craneArgs phase overrides to flake.nix..."
+awk '
+  /extraFileset = \.\/migrations;/ && !done {
+    print
+    print "          craneArgs = {"
+    print "            buildCommand = \"echo SENTINEL_APP_BUILD_COMMAND\";"
+    print "            buildCommandPath = \"/nonexistent/SENTINEL_APP_BUILD_COMMAND_PATH\";"
+    print "            buildPhase = \"echo SENTINEL_APP_BUILD_PHASE\";"
+    print "            buildPhaseCargoCommand = \"echo SENTINEL_APP_BUILD_PHASE_CARGO\";"
+    print "            cargoBuildCommand = \"echo SENTINEL_APP_CARGO_BUILD\";"
+    print "            cargoCheckCommand = \"echo SENTINEL_APP_CARGO_CHECK\";"
+    print "            cargoTestCommand = \"echo SENTINEL_APP_CARGO_TEST\";"
+    print "            checkPhase = \"echo SENTINEL_APP_CHECK_PHASE\";"
+    print "            checkPhaseCargoCommand = \"echo SENTINEL_APP_CHECK_PHASE_CARGO\";"
+    print "            dontBuild = \"SENTINEL_APP_DONT_BUILD\";"
+    print "            dontCheck = \"SENTINEL_APP_DONT_CHECK\";"
+    print "            dontConfigure = \"SENTINEL_APP_DONT_CONFIGURE\";"
+    print "            dontDist = \"SENTINEL_APP_DONT_DIST\";"
+    print "            dontFixup = \"SENTINEL_APP_DONT_FIXUP\";"
+    print "            dontInstall = \"SENTINEL_APP_DONT_INSTALL\";"
+    print "            dontPatch = \"SENTINEL_APP_DONT_PATCH\";"
+    print "            dontUnpack = \"SENTINEL_APP_DONT_UNPACK\";"
+    print "            doInstallCargoArtifacts = false;"
+    print "            fixupPhase = \"echo SENTINEL_APP_FIXUP_PHASE\";"
+    print "            installPhase = \"echo SENTINEL_APP_INSTALL_PHASE\";"
+    print "            installPhaseCommand = \"echo SENTINEL_APP_INSTALL_PHASE_CARGO\";"
+    print "            meta.description = \"SENTINEL_APP_META\";"
+    print "            outputs = [ \"out\" \"doc\" ];"
+    print "            phases = \"unpackPhase patchPhase installPhase\";"
+    print "            postInstall = \"echo SENTINEL_APP_POST_INSTALL\";"
+    print "            preFixup = \"echo SENTINEL_APP_PRE_FIXUP\";"
+    print "          };"
+    done = 1
+    next
+  }
+  { print }
+  END {
+    if (!done) {
+      print "ERROR: did not find the extraFileset anchor to insert craneArgs after" > "/dev/stderr"
+      exit 1
+    }
+  }
+' flake.nix > flake.nix.new
+mv flake.nix.new flake.nix
+commit_all "add craneArgs phase overrides"
+
+# Read one named flake output rather than the whole recursive closure: it avoids
+# materialising every derivation the app depends on, and it anchors the deps
+# derivation by its flake attr instead of a hard-coded name/version string.
+#
+# Nix 2.35 wraps `derivation show` output as {version, derivations}; 2.28 emits
+# the bare drvPath->derivation map. `(.derivations // .)` accepts either, and the
+# two `error` branches turn a further shape change into a readable message rather
+# than a jq stack trace, since `set -e` aborts on either.
+#
+# Each derivation is evaluated once and every lookup below reads from the
+# captured JSON — the previous version spawned five `nix derivation show` runs
+# per leg, re-evaluating the consumer flake each time.
+drv_json() {
+  run_verbose nix derivation show ".#$1" | jq -c '
+    (if type == "object" then . else error("derivation show did not return an object") end)
+    | (.derivations // .)
+    | to_entries
+    | (if length == 1 then . else error("expected exactly 1 derivation, got \(length)") end)
+    | .[0].value'
+}
+
+drv_env() {
+  jq -r --arg key "$1" '.env[$key] // ""' <<<"$2"
+}
+
+app_drv=$(drv_json default)
+deps_drv=$(drv_json cargoArtifacts)
+
+app_build_phase=$(drv_env buildPhase "$app_drv")
+deps_build_phase=$(drv_env buildPhase "$deps_drv")
+deps_install_phase=$(drv_env installPhase "$deps_drv")
+
+# Anchors the reader: if the phase attributes stop being plain env vars these fail
+# loudly instead of letting the SENTINEL checks below pass vacuously against empty
+# strings.
+if [ -n "$deps_build_phase" ] && [ -n "$deps_install_phase" ]; then
+  pass "deps derivation phases are readable from the derivation graph"
+else
+  fail "could not read phases for the deps derivation — update drv_json in Test 10"
+fi
+
+# Proves craneArgs still reaches the app, so the SENTINEL checks below are testing
+# that the deps args were filtered, not that nothing was passed at all.
+case "$app_build_phase" in
+*SENTINEL_APP_BUILD_PHASE*)
+  pass "craneArgs still reaches the app derivation" ;;
+*)
+  fail "craneArgs.buildPhase did not reach the app derivation: $app_build_phase" ;;
+esac
+
+case "$deps_build_phase" in
+*cargoWithProfile*)
+  pass "deps derivation still runs crane's own build command" ;;
+*)
+  fail "deps buildPhase is not crane's default: $deps_build_phase" ;;
+esac
+
+# Every denylist key that leaks surfaces either as its own env var (dont*,
+# buildCommand, phases, ...) or spliced into an assembled phase string
+# (buildPhaseCargoCommand / cargoBuildCommand into buildPhase,
+# installPhaseCommand / postInstall into installPhase, checkPhaseCargoCommand /
+# cargoCheckCommand into checkPhase, ...), so one scan of every env value catches
+# all of them in a single assertion.
+deps_leaked_keys=$(jq -r '
+  .env | to_entries | map(select(.value | test("SENTINEL_APP_"))) | map(.key) | join(", ")
+' <<<"$deps_drv")
+if [ -z "$deps_leaked_keys" ]; then
+  pass "no craneArgs phase key reached the deps derivation"
+else
+  fail "craneArgs phase keys leaked into the deps derivation: $deps_leaked_keys"
+fi
+
+# buildDepsOnly force-sets doInstallCargoArtifacts = true so the cache is always
+# published, and its cleanedArgs drop `outputs` — both hold for current crane,
+# and the denylist entries keep them true for whatever crane rev a consumer
+# pins. The sentinels set the opposite values, so both assertions prove the deps
+# derivation keeps crane's own defaults.
+deps_do_install=$(drv_env doInstallCargoArtifacts "$deps_drv")
+if [ "$deps_do_install" = "1" ]; then
+  pass "deps derivation keeps crane's doInstallCargoArtifacts"
+else
+  fail "doInstallCargoArtifacts leaked into the deps derivation: $deps_do_install"
+fi
+
+# The versioned `derivation show` shape renders outputs as an object keyed by
+# output name; the flat shape as a list. Normalize to the list of names.
+deps_outputs=$(jq -c '[.outputs | if type == "array" then .[] else keys[] end] | sort' <<<"$deps_drv")
+if [ "$deps_outputs" = '["out"]' ]; then
+  pass "deps derivation keeps its single out output"
+else
+  fail "outputs leaked into the deps derivation: $deps_outputs"
+fi
+
+# meta is not an env var and `nix derivation show` does not serialize it, so
+# read it from the derivation attr instead. The sentinel above sets
+# description, so empty proves the key was stripped.
+deps_meta_description=$(run_verbose nix eval --raw --apply 'd: d.meta.description or ""' ".#packages.$SYSTEM.cargoArtifacts")
+if [ -z "$deps_meta_description" ]; then
+  pass "craneArgs meta did not reach the deps derivation"
+else
+  fail "meta leaked into the deps derivation: $deps_meta_description"
+fi
+
+echo "  Adding cargoArtifactsArgs to flake.nix..."
+awk '
+  /extraFileset = \.\/migrations;/ && !done {
+    print
+    print "          cargoArtifactsArgs = {"
+    print "            buildPhaseCargoCommand = \"echo SENTINEL_DEPS_CHANNEL\";"
+    print "          };"
+    done = 1
+    next
+  }
+  { print }
+  END {
+    if (!done) {
+      print "ERROR: did not find the extraFileset anchor to insert cargoArtifactsArgs after" > "/dev/stderr"
+      exit 1
+    }
+  }
+' flake.nix > flake.nix.new
+mv flake.nix.new flake.nix
+commit_all "add cargoArtifactsArgs deps override"
+
+deps_drv=$(drv_json cargoArtifacts)
+deps_build_phase=$(drv_env buildPhase "$deps_drv")
+
+case "$deps_build_phase" in
+*SENTINEL_DEPS_CHANNEL*)
+  pass "cargoArtifactsArgs reaches the deps derivation" ;;
+*)
+  fail "cargoArtifactsArgs.buildPhaseCargoCommand did not reach the deps build: $deps_build_phase" ;;
+esac
+
 echo ""
 echo "=== All integration tests passed ==="
