@@ -540,6 +540,7 @@ in
 {
   inherit
     app
+    wrappedApp
     frontend
     commonArgs
     tauriConfig
