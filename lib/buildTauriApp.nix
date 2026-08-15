@@ -13,6 +13,44 @@ let
   inherit (pkgs) lib;
   inherit (lib) types mkOption;
 
+  defaultTauriBuild =
+    {
+      configFlag,
+      cargoExtraArgs,
+      ...
+    }:
+    ''
+      cargo tauri build --no-bundle \
+        ${cargoExtraArgs} \
+        ${configFlag}
+    '';
+
+  defaultTauriInstall =
+    {
+      binaryName,
+      ...
+    }:
+    ''
+      binaryPath=$(find target -type f -path ${lib.escapeShellArg "*/release/${binaryName}"} -print -quit)
+
+      if [ -z "$binaryPath" ]; then
+        echo "failed to locate built binary ${binaryName}" >&2
+        exit 1
+      fi
+
+      mkdir -p $out/bin
+      cp "$binaryPath" $out/bin/
+    '';
+
+  # The mkDefault is load-bearing: types.functionTo merges definitions by
+  # applying each and merging the results, and types.lines merges by
+  # concatenation — a plain definition here would append the caller's command
+  # to the default instead of replacing it.
+  defaultsModule = {
+    config.tauriBuild = lib.mkDefault defaultTauriBuild;
+    config.tauriInstall = lib.mkDefault defaultTauriInstall;
+  };
+
   optionsModule =
     { config, ... }:
     {
@@ -128,6 +166,24 @@ let
             honors e.g. buildPhaseCargoCommand there.
           '';
         };
+        tauriBuild = mkOption {
+          type = types.functionTo types.lines;
+          description = ''
+            Renders the `cargo tauri build` invocation as a function of the
+            computed context (configFlag, cargoExtraArgs, frontendDist,
+            manifestPathFlag, tauriSubdir, pname, version, binaryName). The
+            function must accept `...` — the context may gain keys. Defaults
+            to the --no-bundle build below.
+          '';
+        };
+        tauriInstall = mkOption {
+          type = types.functionTo types.lines;
+          description = ''
+            Renders the install phase as a function of the computed context
+            (same keys as tauriBuild). The function must accept `...`.
+            Defaults to installing the built binary into $out/bin.
+          '';
+        };
       };
     };
 
@@ -136,7 +192,11 @@ let
   # `version = 1`) fails with the option path and expected type.
   cfg =
     (lib.evalModules {
-      modules = [ optionsModule ] ++ lib.toList args;
+      modules = [
+        optionsModule
+        defaultsModule
+      ]
+      ++ lib.toList args;
     }).config;
 
   inherit (cfg)
@@ -293,6 +353,33 @@ let
 
   sharedCargoExtraArgs = joinArgs (baseCargoExtraArgs ++ [ manifestPathArg ]);
 
+  # The values a tauriBuild/tauriInstall closure receives. Only Nix-side facts
+  # the caller cannot compute — cargo tauri's own flags are the caller's
+  # business (#15). Callers must accept `...`; adding a key here must never
+  # break an existing closure.
+  tauriContext = {
+    frontendDist = "${frontend}";
+    configFlag = "--config \"$TAURI_CONFIG\"";
+    manifestPathFlag = manifestPathArg;
+    inherit
+      tauriSubdir
+      pname
+      version
+      binaryName
+      ;
+    cargoExtraArgs = tauriBuildCargoExtraArgs;
+  };
+
+  renderedTauriBuild = cfg.tauriBuild tauriContext;
+  renderedTauriInstall = cfg.tauriInstall tauriContext;
+
+  # A --target inside the closure instead of cargoExtraArgs compiles the deps
+  # cache for the host while the app links against the wrong artifacts. Convert
+  # the silent cache mismatch into a readable eval error.
+  callerConfiguredTargetForCrane = (lib.match ".*--target[ =].*" cargoExtraArgs) != null;
+  callerEmbeddedTarget =
+    (lib.match ".*--target[ =].*" renderedTauriBuild) != null && !callerConfiguredTargetForCrane;
+
   # Pin crane's vendoring to the tauri crate's own Cargo.lock when one exists
   # there (the "loose path-deps" layout). In a true cargo workspace only the
   # workspace root has a Cargo.lock, so we leave crane on its default. A
@@ -413,23 +500,14 @@ let
 
       nativeBuildInputs = appArgs.nativeBuildInputs ++ [ pkgs.cargo-tauri ];
 
-      buildPhaseCargoCommand = ''
-        cargo tauri build --no-bundle \
-          ${tauriBuildCargoExtraArgs} \
-          --config "$TAURI_CONFIG"
-      '';
+      buildPhaseCargoCommand = lib.throwIf callerEmbeddedTarget ''
+        buildTauriApp: the tauriBuild closure embeds `--target` but the
+        dependency cache is built from cargoExtraArgs. Set `--target` there so
+        cargoArtifacts and the app build agree — the closure receives it in the
+        context.
+      '' renderedTauriBuild;
 
-      installPhaseCommand = ''
-        binaryPath=$(find target -type f -path ${lib.escapeShellArg "*/release/${binaryName}"} -print -quit)
-
-        if [ -z "$binaryPath" ]; then
-          echo "failed to locate built binary ${binaryName}" >&2
-          exit 1
-        fi
-
-        mkdir -p $out/bin
-        cp "$binaryPath" $out/bin/
-      '';
+      installPhaseCommand = renderedTauriInstall;
 
       doInstallCargoArtifacts = false;
     }

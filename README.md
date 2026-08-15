@@ -122,6 +122,16 @@ nix flake init -t github:JPHutchins/crane-tauri
 - `tauri/custom-protocol` is injected by default (required for Tauri v2 release
   builds); override the feature set via `tauriFeatures`, and your
   `cargoExtraArgs` is appended
+- `tauriBuild` / `tauriInstall` replace the build and install phase commands:
+  closures over the computed context (`configFlag`, `cargoExtraArgs`,
+  `frontendDist`, `manifestPathFlag`, `tauriSubdir`, `pname`, `version`,
+  `binaryName`) that must accept `...` — the context may gain keys. A caller
+  closure replaces the default rather than appending to it
+
+  ```nix
+  tauriBuild = { configFlag, cargoExtraArgs, ... }:
+    "cargo tauri build -b deb ${cargoExtraArgs} ${configFlag}";
+  ```
 
 For a more complete example with checks, see [templates/default/flake.nix](./templates/default/flake.nix).
 

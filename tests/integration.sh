@@ -409,6 +409,122 @@ grep -qaF "EXTRA_FILESET_MARKER_v2" "$extrafileset_out/bin/tauri-app" \
   || fail "updated extraFileset marker not found in rebuilt binary"
 pass "rebuilt binary picks up the extraFileset content edit"
 
+echo "=== Test 11: tauriBuild/tauriInstall closures replace the defaults ==="
+
+# Evaluation only — no build.
+
+# Read one named flake output rather than the whole recursive closure: it avoids
+# materialising every derivation the app depends on, and it anchors the deps
+# derivation by its flake attr instead of a hard-coded name/version string.
+#
+# Nix 2.35 wraps `derivation show` output as {version, derivations}; 2.28 emits
+# the bare drvPath->derivation map. `(.derivations // .)` accepts either, and the
+# two `error` branches turn a further shape change into a readable message rather
+# than a jq stack trace, since `set -e` aborts on either.
+#
+# Each derivation is evaluated once and every lookup below reads from the
+# captured JSON — the previous version spawned five `nix derivation show` runs
+# per leg, re-evaluating the consumer flake each time.
+drv_json() {
+  run_verbose nix derivation show ".#$1" | jq -c '
+    (if type == "object" then . else error("derivation show did not return an object") end)
+    | (.derivations // .)
+    | to_entries
+    | (if length == 1 then . else error("expected exactly 1 derivation, got \(length)") end)
+    | .[0].value'
+}
+
+drv_env() {
+  jq -r --arg key "$1" '.env[$key] // ""' <<<"$2"
+}
+
+echo "  Adding caller closures to flake.nix..."
+awk '
+  /extraFileset = \.\/migrations;/ && !done {
+    print
+    print "          tauriBuild = { configFlag, ... }: \"echo SENTINEL_CALLER_BUILD " "$" "{configFlag}\";"
+    print "          tauriInstall = _: \"mkdir -p " "$" "out\";"
+    done = 1
+    next
+  }
+  { print }
+  END {
+    if (!done) {
+      print "ERROR: did not find the extraFileset anchor to insert closures after" > "/dev/stderr"
+      exit 1
+    }
+  }
+' flake.nix > flake.nix.new
+mv flake.nix.new flake.nix
+commit_all "add caller tauriBuild/tauriInstall closures"
+
+app_drv=$(drv_json default)
+app_build_phase=$(drv_env buildPhase "$app_drv")
+app_install_phase=$(drv_env installPhase "$app_drv")
+
+# The load-bearing mkDefault semantics: a caller closure REPLACES the library
+# default; without mkDefault, types.lines would concatenate the two commands.
+case "$app_build_phase" in
+*SENTINEL_CALLER_BUILD*)
+  pass "caller tauriBuild replaces the default" ;;
+*)
+  fail "caller tauriBuild did not replace the default: $app_build_phase" ;;
+esac
+
+case "$app_build_phase$app_install_phase" in
+*cargo\ tauri\ build*|*find\ target*)
+  fail "default closure leaked alongside the caller's: $app_build_phase $app_install_phase" ;;
+*)
+  pass "default closures did not concatenate with the caller's" ;;
+esac
+
+# A closure may ignore any part of the context — the install closure above takes
+# no context at all — and must still render.
+case "$app_install_phase" in
+*"mkdir -p \$out"*)
+  pass "context-ignoring closure still renders" ;;
+*)
+  fail "context-ignoring closure did not render: $app_install_phase" ;;
+esac
+
+replace_in_file '/tauriBuild = { configFlag/d; /tauriInstall = _:/d' flake.nix
+commit_all "remove caller closures"
+
+echo "  Adding a closure with an embedded --target..."
+awk '
+  /extraFileset = \.\/migrations;/ && !done {
+    print
+    print "          tauriBuild = { ... }: \"cargo tauri build --no-bundle --target x86_64-unknown-linux-gnu\";"
+    done = 1
+    next
+  }
+  { print }
+  END {
+    if (!done) {
+      print "ERROR: did not find the extraFileset anchor to insert the --target closure after" > "/dev/stderr"
+      exit 1
+    }
+  }
+' flake.nix > flake.nix.new
+mv flake.nix.new flake.nix
+commit_all "add --target embedding closure"
+
+# A --target inside the closure (rather than cargoExtraArgs) compiles the deps
+# cache for the host and links the app against the wrong artifacts — the guard
+# must fail the eval with the cargoExtraArgs pointer.
+if nix eval --raw ".#packages.$SYSTEM.default.drvPath" 2>/tmp/target-guard.err; then
+  fail "--target guard did not fire"
+else
+  if grep -qF "tauriBuild closure embeds" /tmp/target-guard.err; then
+    pass "--target guard fires with the cargoExtraArgs pointer"
+  else
+    fail "--target guard fired with the wrong message: $(cat /tmp/target-guard.err)"
+  fi
+fi
+
+replace_in_file '/tauriBuild = { ... }: "cargo tauri build/d' flake.nix
+commit_all "remove --target closure"
+
 echo "=== Test 10: craneArgs phase keys never reach the deps derivation ==="
 
 # Evaluation only — no build. Runs last because it leaves the consumer flake with
@@ -459,31 +575,6 @@ awk '
 ' flake.nix > flake.nix.new
 mv flake.nix.new flake.nix
 commit_all "add craneArgs phase overrides"
-
-# Read one named flake output rather than the whole recursive closure: it avoids
-# materialising every derivation the app depends on, and it anchors the deps
-# derivation by its flake attr instead of a hard-coded name/version string.
-#
-# Nix 2.35 wraps `derivation show` output as {version, derivations}; 2.28 emits
-# the bare drvPath->derivation map. `(.derivations // .)` accepts either, and the
-# two `error` branches turn a further shape change into a readable message rather
-# than a jq stack trace, since `set -e` aborts on either.
-#
-# Each derivation is evaluated once and every lookup below reads from the
-# captured JSON — the previous version spawned five `nix derivation show` runs
-# per leg, re-evaluating the consumer flake each time.
-drv_json() {
-  run_verbose nix derivation show ".#$1" | jq -c '
-    (if type == "object" then . else error("derivation show did not return an object") end)
-    | (.derivations // .)
-    | to_entries
-    | (if length == 1 then . else error("expected exactly 1 derivation, got \(length)") end)
-    | .[0].value'
-}
-
-drv_env() {
-  jq -r --arg key "$1" '.env[$key] // ""' <<<"$2"
-}
 
 app_drv=$(drv_json default)
 deps_drv=$(drv_json cargoArtifacts)
