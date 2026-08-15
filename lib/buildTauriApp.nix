@@ -114,6 +114,18 @@ let
             Escape hatch for arbitrary crane / mkDerivation args (doCheck, env
             vars, hooks, ...). Use this rather than passing such args at the top
             level, which the module checker rejects as unknown options.
+            Phase/install-shaping keys are stripped before the deps build and
+            from commonArgs — customise the deps build via cargoArtifactsArgs.
+          '';
+        };
+        cargoArtifactsArgs = mkOption {
+          type = types.attrsOf types.anything;
+          default = { };
+          description = ''
+            crane / mkDerivation args applied to the cargoArtifacts (deps)
+            derivation only, merged after the app-phase keys are stripped. The
+            explicit channel for customising the dependency build — crane
+            honors e.g. buildPhaseCargoCommand there.
           '';
         };
       };
@@ -135,6 +147,7 @@ let
     binaryName
     cargoExtraArgs
     cargoArtifacts
+    cargoArtifactsArgs
     extraBuildInputs
     extraNativeBuildInputs
     tauriFeatures
@@ -318,10 +331,6 @@ let
       ];
     };
 
-  commonArgs = sharedArgs // {
-    src = appSrc;
-  };
-
   # Keys that describe how to build and install the *app*. They must not reach
   # buildDepsOnly: crane honors a caller-supplied buildPhaseCargoCommand /
   # installPhaseCommand there, and mkCargoDerivation honors buildPhase /
@@ -330,16 +339,31 @@ let
   # compiled nothing and the cache it publishes is empty.
   # buildCommand, buildCommandPath and phases are the stdenv-level equivalents:
   # genericBuild sources/evals the first two and returns before the phase list is
-  # ever built, and phases can simply omit buildPhase — so any of them replaces
-  # the dependency build just as effectively as the crane-level keys above.
+  # ever built, and phases can simply omit buildPhase. The dont* flags have the
+  # same effect per phase — genericBuild's phase loop skips any phase whose
+  # dont* flag is set — and buildDepsOnly force-sets doInstallCargoArtifacts, so
+  # an empty target dir is still published. cargoBuildCommand / cargoCheckCommand
+  # are crane's command slots: buildDepsOnly's default buildPhaseCargoCommand
+  # interpolates them, so a non-building value empties the cache the same way.
   appOnlyCraneKeys = [
     "buildCommand"
     "buildCommandPath"
     "buildPhase"
     "buildPhaseCargoCommand"
+    "cargoBuildCommand"
+    "cargoCheckCommand"
+    "cargoTestCommand"
     "checkPhase"
     "checkPhaseCargoCommand"
     "doInstallCargoArtifacts"
+    "dontBuild"
+    "dontCheck"
+    "dontConfigure"
+    "dontDist"
+    "dontFixup"
+    "dontInstall"
+    "dontPatch"
+    "dontUnpack"
     "fixupPhase"
     "installPhase"
     "installPhaseCommand"
@@ -350,11 +374,27 @@ let
     "preFixup"
   ];
 
+  appArgs = sharedArgs // {
+    src = appSrc;
+  };
+
+  # The public attrset consumers derive their checks from (the README's clippy
+  # recipe). Stripped of the same keys: a checks derivation honors buildCommand /
+  # phases / buildPhase exactly like buildDepsOnly does, so a composed check
+  # could pass having compiled nothing.
+  commonArgs = builtins.removeAttrs appArgs appOnlyCraneKeys;
+
   resolvedCargoArtifacts =
     if cargoArtifacts != null then
       cargoArtifacts
     else
-      craneLib.buildDepsOnly ((builtins.removeAttrs sharedArgs appOnlyCraneKeys) // { src = depsSrc; });
+      craneLib.buildDepsOnly (
+        (builtins.removeAttrs sharedArgs appOnlyCraneKeys)
+        // {
+          src = depsSrc;
+        }
+        // cfg.cargoArtifactsArgs
+      );
 
   tauriConfig = builtins.toJSON (
     lib.recursiveUpdate extraTauriConfig {
@@ -366,12 +406,12 @@ let
   );
 
   app = craneLib.mkCargoDerivation (
-    commonArgs
+    appArgs
     // {
       cargoArtifacts = resolvedCargoArtifacts;
       TAURI_CONFIG = tauriConfig;
 
-      nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.cargo-tauri ];
+      nativeBuildInputs = appArgs.nativeBuildInputs ++ [ pkgs.cargo-tauri ];
 
       buildPhaseCargoCommand = ''
         cargo tauri build --no-bundle \
