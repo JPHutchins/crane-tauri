@@ -29,11 +29,7 @@ jobs:
       api_base_url:  ${{ vars.API_BASE_URL }}
       model_full:    deepseek-v4-pro
       model_mechanic: deepseek-v4-pro
-      # The tier aliases the agent's own internal model picks resolve to. Left unset they follow the
-      # route models above, which would put every pick on pro; naming them keeps the cheap tiers
-      # cheap. haiku especially: it inherits model_mechanic, and that is pro now.
-      sonnet_model:  deepseek-v4-flash
-      haiku_model:   deepseek-v4-flash
+      subagent_model: deepseek-v4-flash   # finder fan-out runs on flash; the main agent adjudicates on model_full
       scope:         ${{ vars.SCOPE }}   # empty ⇒ the reviewer infers scope from the README's first paragraph (#139)
       mechanic_time_limit: 3m
       mechanic_grace_period: 90s
