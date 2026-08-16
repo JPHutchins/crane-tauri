@@ -15,14 +15,15 @@ let
 
   # Derived locally rather than read from pkgs.cargo-tauri.hook (a
   # makeSetupHook substitution — reaching into it couples us to a nixpkgs
-  # implementation detail across versions).
+  # implementation detail across versions). Falls back to deb rather than
+  # throwing: the lib must keep evaluating on platforms that never build
+  # here (the old --no-bundle default did).
   defaultBundleType =
     {
       darwin = "app";
       linux = "deb";
     }
-    .${pkgs.stdenv.hostPlatform.parsed.kernel.name}
-      or (throw "crane-tauri: unsupported platform ${pkgs.stdenv.hostPlatform.parsed.kernel.name}");
+    .${pkgs.stdenv.hostPlatform.parsed.kernel.name} or "deb";
 
   defaultTauriBuild =
     {
@@ -46,32 +47,41 @@ let
         mkdir -p "$out/Applications"
 
         shopt -s nullglob
-        appBundles=(target/release/bundle/macos/*.app)
+        appBundles=(target{,/*}/release/bundle/macos/*.app)
         shopt -u nullglob
 
         if [ "''${#appBundles[@]}" -eq 0 ]; then
-          echo "crane-tauri: no .app bundles found under target/release/bundle/macos" >&2
+          echo "crane-tauri: no .app bundles found under target{,/*}/release/bundle/macos" >&2
           exit 1
         fi
 
         mv -- "''${appBundles[@]}" "$out/Applications/"
 
+        # The binary is already inside the .app; the bin/ copy keeps the
+        # $out/bin contract consumers and wrappedApp rely on.
+        binaryPath=$(find target -type f -path "*/release/${binaryName}" -print -quit)
+        if [ -z "$binaryPath" ]; then
+          echo "failed to locate built binary ${binaryName}" >&2
+          exit 1
+        fi
         mkdir -p "$out/bin"
-        cp target/release/${binaryName} "$out/bin/"
+        cp "$binaryPath" "$out/bin/"
       ''
     else
       ''
         shopt -s nullglob
-        bundleContents=(target/release/bundle/deb/*/data/usr/*)
+        bundleContents=(target{,/*}/release/bundle/deb/*/data/usr/*)
         shopt -u nullglob
 
         if [ "''${#bundleContents[@]}" -eq 0 ]; then
-          echo "crane-tauri: no deb bundle contents found under target/release/bundle/deb" >&2
+          echo "crane-tauri: no deb bundle contents found under target{,/*}/release/bundle/deb" >&2
+          echo "  the default install expects a bundled build — override tauriBuild and" >&2
+          echo "  tauriInstall together if your app does not bundle" >&2
           exit 1
         fi
 
         mkdir -p "$out"
-        mv -- "''${bundleContents[@]}" "$out"/
+        cp -a -- "''${bundleContents[@]}" "$out"/
       '';
 
   optionsModule =
@@ -101,8 +111,9 @@ let
           description = ''
             Cargo binary name to install from target/release. Defaults to pname,
             but the on-disk binary is named by cargo ([package].name in
-            src-tauri/Cargo.toml); set this when they differ, or the install
-            phase fails late with "failed to locate built binary".
+            src-tauri/Cargo.toml); set this when they differ. Used by the
+            macOS install; on Linux the installed binary keeps cargo's name
+            from the deb layout.
           '';
         };
         cargoExtraArgs = mkOption {
@@ -556,9 +567,8 @@ let
         ];
         installPhase = ''
           runHook preInstall
-          mkdir -p $out/bin
-          cp ${app}/bin/${binaryName} $out/bin/${binaryName}
-          chmod +w $out/bin/${binaryName}
+          cp -a ${app}/. "$out"/
+          chmod +w "$out"/bin/*
           runHook postInstall
         '';
         preFixup = ''

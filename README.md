@@ -110,10 +110,10 @@ nix flake init -t github:JPHutchins/crane-tauri
 - `tauri.cargoArtifacts` is the reusable crane dependency cache derivation
 - `tauri.commonArgs`, `tauri.tauriConfig`, and `tauri.tauriSubdir` are exposed
   for composing extra checks (clippy, deny) against the same source and config
-- `binaryName` defaults to `pname`, but the installed binary is named by cargo
-  (`[package].name` in `src-tauri/Cargo.toml`). Set `binaryName` when they
-  differ, or the build fails at the install step with `failed to locate built
-  binary`
+- `binaryName` defaults to `pname`, but the on-disk binary is named by cargo
+  (`[package].name` in `src-tauri/Cargo.toml`); set it when they differ. It
+  selects the macOS install's binary (and wrappedApp's copy); on Linux the
+  deb layout keeps cargo's name
 - to add system dependencies, pass `extraNativeBuildInputs` / `extraBuildInputs`
   (appended to `pkg-config` and the Tauri system libraries); other crane /
   `mkDerivation` args go via `craneArgs`
