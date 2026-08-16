@@ -1,0 +1,42 @@
+# Cancel an in-flight code review when its PR is merged or closed — pure token-cost reduction (#183).
+#
+# Drop this file into `.github/workflows/` alongside your review workflow. It is fully generic — no
+# secrets, models, or api_base_url, and no version to pin — because it only occupies a concurrency
+# group, so every consumer's copy is identical.
+#
+# A review fires from `workflow_run` under the per-PR concurrency group
+# `review-<head_repo>-<head_branch>` (review-reusable.yaml's review + comment jobs). A merge or manual
+# close pushes no commit, so that group never fires on its own and the review runs to completion (or
+# starts from the queue) against a PR nobody will iterate — every token after the merge is wasted, and
+# the worst case is a fast-merge whose review is still QUEUED, spending its whole cost for nothing.
+#
+# This workflow enters the SAME group on `pull_request: closed`; `cancel-in-progress` then cancels
+# whatever review is queued or running there — no run lookup and no token (it is a group occupation, so
+# permissions are empty). Forks work because the `pull_request` event fires in the base repo, so
+# head.repo.full_name / head.ref name the same group the review used. A review that only STARTS after
+# the close (CI concluding post-merge) is not in the group to cancel, but the pipeline's gather step
+# already skips a PR that is no longer open — so that costs the gather step, not a full review. One
+# group covers the full, mechanic, AND on-comment routes (they all run in it), and `types: [closed]`
+# covers both merge and manual close.
+#
+# The concurrency group below MUST resolve to the same value as review-reusable.yaml's review job.
+name: Cancel code review on PR close
+
+on:
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: review-${{ github.event.pull_request.head.repo.full_name != '' && github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.event.pull_request.head.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    steps:
+      - run: >-
+          echo "PR #${{ github.event.pull_request.number }}
+          ${{ github.event.pull_request.merged && 'merged' || 'closed' }} — entered its review
+          concurrency group; any queued or in-flight code review for it is now cancelled."
