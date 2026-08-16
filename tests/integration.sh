@@ -231,6 +231,18 @@ app_out_before="$consumer_out"
 
 deps_hash_before=$(cargo_artifacts_out_path)
 
+echo "=== Test 13: bundled outputs are installed ==="
+
+case "$SYSTEM" in
+*-darwin)
+  test -d "$consumer_out/Applications/tauri-app.app" || fail "no .app bundle in the app output"
+  pass "app bundle installed into Applications/" ;;
+*)
+  test -n "$(find "$consumer_out/share/applications" -name '*.desktop' -print -quit)" \
+    || fail "no .desktop entry in the app output"
+  pass "deb bundle contents installed (desktop entry present)" ;;
+esac
+
 echo "=== Test 5: Dep caching survives Rust source changes ==="
 
 echo "  Modifying Rust source..."

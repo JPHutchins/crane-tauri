@@ -131,7 +131,10 @@ nix flake init -t github:JPHutchins/crane-tauri
   `frontendDist`, `tauriSubdir`, `pname`, `version`, `binaryName`) that must
   accept `...` — the context may gain keys. A caller closure replaces the
   default rather than appending to it, and `craneArgs.buildPhase` /
-  `installPhase` still take precedence over the closures on the app
+  `installPhase` still take precedence over the closures on the app. The
+  defaults bundle (`cargo tauri build -b deb` on Linux, `-b app` on macOS)
+  and install the bundle contents — desktop entry, icons, the binary — so
+  override `tauriInstall` (and `tauriBuild`) to keep just the binary
 
   ```nix
   tauriBuild = { configFlag, cargoExtraArgs, ... }:
