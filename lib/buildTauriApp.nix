@@ -13,6 +13,35 @@ let
   inherit (pkgs) lib;
   inherit (lib) types mkOption;
 
+  defaultTauriBuild =
+    {
+      configFlag,
+      cargoExtraArgs,
+      ...
+    }:
+    ''
+      cargo tauri build --no-bundle \
+        ${cargoExtraArgs} \
+        ${configFlag}
+    '';
+
+  defaultTauriInstall =
+    {
+      binaryName,
+      ...
+    }:
+    ''
+      binaryPath=$(find target -type f -path ${lib.escapeShellArg "*/release/${binaryName}"} -print -quit)
+
+      if [ -z "$binaryPath" ]; then
+        echo "failed to locate built binary ${binaryName}" >&2
+        exit 1
+      fi
+
+      mkdir -p $out/bin
+      cp "$binaryPath" $out/bin/
+    '';
+
   optionsModule =
     { config, ... }:
     {
@@ -126,6 +155,33 @@ let
             derivation only, merged after the app-phase keys are stripped. The
             explicit channel for customising the dependency build — crane
             honors e.g. buildPhaseCargoCommand there.
+          '';
+        };
+        tauriBuild = mkOption {
+          type = types.functionTo types.lines;
+          # Option defaults merge at mkOptionDefault priority, below every
+          # definition including a caller's lib.mkDefault — so any caller
+          # closure replaces this one instead of concatenating with it.
+          default = defaultTauriBuild;
+          description = ''
+            Renders the `cargo tauri build` invocation as a function of the
+            computed context (configFlag, cargoExtraArgs, frontendDist,
+            tauriSubdir, pname, version, binaryName). The function must accept
+            `...` — the context may gain keys. Defaults to the --no-bundle
+            build. craneArgs.buildPhase / installPhase take precedence over
+            this closure on the app derivation (crane honors them ahead of the
+            assembled phase); buildPhaseCargoCommand / installPhaseCommand
+            do not.
+          '';
+        };
+        tauriInstall = mkOption {
+          type = types.functionTo types.lines;
+          default = defaultTauriInstall;
+          description = ''
+            Renders the install phase as a function of the computed context
+            (same keys as tauriBuild). The function must accept `...`.
+            Defaults to installing the built binary into $out/bin. Same
+            craneArgs precedence as tauriBuild.
           '';
         };
       };
@@ -293,6 +349,25 @@ let
 
   sharedCargoExtraArgs = joinArgs (baseCargoExtraArgs ++ [ manifestPathArg ]);
 
+  # The values a tauriBuild/tauriInstall closure receives. Only Nix-side facts
+  # the caller cannot compute — cargo tauri's own flags are the caller's
+  # business (#15). Callers must accept `...`; adding a key here must never
+  # break an existing closure.
+  tauriContext = {
+    frontendDist = "${frontend}";
+    configFlag = "--config \"$TAURI_CONFIG\"";
+    inherit
+      tauriSubdir
+      pname
+      version
+      binaryName
+      ;
+    cargoExtraArgs = tauriBuildCargoExtraArgs;
+  };
+
+  renderedTauriBuild = cfg.tauriBuild tauriContext;
+  renderedTauriInstall = cfg.tauriInstall tauriContext;
+
   # Pin crane's vendoring to the tauri crate's own Cargo.lock when one exists
   # there (the "loose path-deps" layout). In a true cargo workspace only the
   # workspace root has a Cargo.lock, so we leave crane on its default. A
@@ -413,23 +488,9 @@ let
 
       nativeBuildInputs = appArgs.nativeBuildInputs ++ [ pkgs.cargo-tauri ];
 
-      buildPhaseCargoCommand = ''
-        cargo tauri build --no-bundle \
-          ${tauriBuildCargoExtraArgs} \
-          --config "$TAURI_CONFIG"
-      '';
+      buildPhaseCargoCommand = renderedTauriBuild;
 
-      installPhaseCommand = ''
-        binaryPath=$(find target -type f -path ${lib.escapeShellArg "*/release/${binaryName}"} -print -quit)
-
-        if [ -z "$binaryPath" ]; then
-          echo "failed to locate built binary ${binaryName}" >&2
-          exit 1
-        fi
-
-        mkdir -p $out/bin
-        cp "$binaryPath" $out/bin/
-      '';
+      installPhaseCommand = renderedTauriInstall;
 
       doInstallCargoArtifacts = false;
     }

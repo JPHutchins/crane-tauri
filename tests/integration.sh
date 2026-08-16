@@ -30,6 +30,36 @@ replace_in_file() {
   mv "$temp_file" "$file"
 }
 
+# Inserts the lines read from stdin after the first line matching the anchor
+# regex, failing loudly if no line matches. Lines are taken verbatim (no
+# shell/awk interpolation), so they can carry $ and ${...} for nix.
+insert_after_anchor() {
+  local anchor="$1"
+  local target="$2"
+  local lines_file
+
+  lines_file=$(mktemp)
+  cat > "$lines_file"
+  awk -v anchor="$anchor" -v lines_file="$lines_file" '
+    $0 ~ anchor && !done {
+      print
+      while ((getline line < lines_file) > 0) print line
+      close(lines_file)
+      done = 1
+      next
+    }
+    { print }
+    END {
+      if (!done) {
+        print "ERROR: did not find the anchor to insert after: " anchor > "/dev/stderr"
+        exit 1
+      }
+    }
+  ' "$target" > "$target.new"
+  mv "$target.new" "$target"
+  rm -f "$lines_file"
+}
+
 capture_verbose() {
   local log_file="$1"
   shift
@@ -409,56 +439,9 @@ grep -qaF "EXTRA_FILESET_MARKER_v2" "$extrafileset_out/bin/tauri-app" \
   || fail "updated extraFileset marker not found in rebuilt binary"
 pass "rebuilt binary picks up the extraFileset content edit"
 
-echo "=== Test 10: craneArgs phase keys never reach the deps derivation ==="
+echo "=== Test 11: tauriBuild/tauriInstall closures replace the defaults ==="
 
-# Evaluation only — no build. Runs last because it leaves the consumer flake with
-# a deliberately broken app build.
-
-echo "  Adding craneArgs phase overrides to flake.nix..."
-awk '
-  /extraFileset = \.\/migrations;/ && !done {
-    print
-    print "          craneArgs = {"
-    print "            buildCommand = \"echo SENTINEL_APP_BUILD_COMMAND\";"
-    print "            buildCommandPath = \"/nonexistent/SENTINEL_APP_BUILD_COMMAND_PATH\";"
-    print "            buildPhase = \"echo SENTINEL_APP_BUILD_PHASE\";"
-    print "            buildPhaseCargoCommand = \"echo SENTINEL_APP_BUILD_PHASE_CARGO\";"
-    print "            cargoBuildCommand = \"echo SENTINEL_APP_CARGO_BUILD\";"
-    print "            cargoCheckCommand = \"echo SENTINEL_APP_CARGO_CHECK\";"
-    print "            cargoTestCommand = \"echo SENTINEL_APP_CARGO_TEST\";"
-    print "            checkPhase = \"echo SENTINEL_APP_CHECK_PHASE\";"
-    print "            checkPhaseCargoCommand = \"echo SENTINEL_APP_CHECK_PHASE_CARGO\";"
-    print "            dontBuild = \"SENTINEL_APP_DONT_BUILD\";"
-    print "            dontCheck = \"SENTINEL_APP_DONT_CHECK\";"
-    print "            dontConfigure = \"SENTINEL_APP_DONT_CONFIGURE\";"
-    print "            dontDist = \"SENTINEL_APP_DONT_DIST\";"
-    print "            dontFixup = \"SENTINEL_APP_DONT_FIXUP\";"
-    print "            dontInstall = \"SENTINEL_APP_DONT_INSTALL\";"
-    print "            dontPatch = \"SENTINEL_APP_DONT_PATCH\";"
-    print "            dontUnpack = \"SENTINEL_APP_DONT_UNPACK\";"
-    print "            doInstallCargoArtifacts = false;"
-    print "            fixupPhase = \"echo SENTINEL_APP_FIXUP_PHASE\";"
-    print "            installPhase = \"echo SENTINEL_APP_INSTALL_PHASE\";"
-    print "            installPhaseCommand = \"echo SENTINEL_APP_INSTALL_PHASE_CARGO\";"
-    print "            meta.description = \"SENTINEL_APP_META\";"
-    print "            outputs = [ \"out\" \"doc\" ];"
-    print "            phases = \"unpackPhase patchPhase installPhase\";"
-    print "            postInstall = \"echo SENTINEL_APP_POST_INSTALL\";"
-    print "            preFixup = \"echo SENTINEL_APP_PRE_FIXUP\";"
-    print "          };"
-    done = 1
-    next
-  }
-  { print }
-  END {
-    if (!done) {
-      print "ERROR: did not find the extraFileset anchor to insert craneArgs after" > "/dev/stderr"
-      exit 1
-    }
-  }
-' flake.nix > flake.nix.new
-mv flake.nix.new flake.nix
-commit_all "add craneArgs phase overrides"
+# Evaluation only — no build.
 
 # Read one named flake output rather than the whole recursive closure: it avoids
 # materialising every derivation the app depends on, and it anchors the deps
@@ -484,6 +467,113 @@ drv_json() {
 drv_env() {
   jq -r --arg key "$1" '.env[$key] // ""' <<<"$2"
 }
+
+echo "  Adding caller closures to flake.nix..."
+insert_after_anchor 'extraFileset = \.\/migrations;' flake.nix <<'CLOSURES'
+          tauriBuild = { configFlag, ... }: "echo SENTINEL_CALLER_BUILD ${configFlag}";
+          tauriInstall = _: "mkdir -p $out";
+CLOSURES
+commit_all "add caller tauriBuild/tauriInstall closures"
+
+app_drv=$(drv_json default)
+app_build_phase=$(drv_env buildPhase "$app_drv")
+app_install_phase=$(drv_env installPhase "$app_drv")
+
+# The load-bearing option-default semantics: a caller closure REPLACES the
+# library default; without the mkOptionDefault priority, types.lines would
+# concatenate the two commands.
+case "$app_build_phase" in
+*SENTINEL_CALLER_BUILD*)
+  pass "caller tauriBuild replaces the default" ;;
+*)
+  fail "caller tauriBuild did not replace the default: $app_build_phase" ;;
+esac
+
+case "$app_build_phase$app_install_phase" in
+*cargo\ tauri\ build*|*find\ target*)
+  fail "default closure leaked alongside the caller's: $app_build_phase $app_install_phase" ;;
+*)
+  pass "default closures did not concatenate with the caller's" ;;
+esac
+
+# A closure may ignore any part of the context — the install closure above takes
+# no context at all — and must still render.
+case "$app_install_phase" in
+*"mkdir -p \$out"*)
+  pass "context-ignoring closure still renders" ;;
+*)
+  fail "context-ignoring closure did not render: $app_install_phase" ;;
+esac
+
+replace_in_file '/tauriBuild = { configFlag/d; /tauriInstall = _:/d' flake.nix
+commit_all "remove caller closures"
+
+echo "  Adding a caller mkDefault closure to flake.nix..."
+insert_after_anchor 'extraFileset = \.\/migrations;' flake.nix <<'CLOSURES'
+          tauriBuild = lib.mkDefault ({ ... }: "echo SENTINEL_CALLER_MKDEFAULT");
+CLOSURES
+commit_all "add caller mkDefault tauriBuild"
+
+app_drv=$(drv_json default)
+app_build_phase=$(drv_env buildPhase "$app_drv")
+
+# Option defaults sit at mkOptionDefault priority, below a caller's
+# lib.mkDefault — so even a mkDefault-priority caller closure replaces the
+# default instead of tying with it (a tie would concatenate via types.lines).
+case "$app_build_phase" in
+*SENTINEL_CALLER_MKDEFAULT*)
+  pass "caller mkDefault tauriBuild replaces the option default" ;;
+*)
+  fail "caller mkDefault tauriBuild did not replace the option default: $app_build_phase" ;;
+esac
+
+case "$app_build_phase" in
+*cargo\ tauri\ build*)
+  fail "option default concatenated with the caller's mkDefault: $app_build_phase" ;;
+*)
+  pass "option default did not concatenate with the caller's mkDefault" ;;
+esac
+
+replace_in_file '/tauriBuild = lib.mkDefault/d' flake.nix
+commit_all "remove mkDefault closure"
+
+echo "=== Test 10: craneArgs phase keys never reach the deps derivation ==="
+
+# Evaluation only — no build. Runs last because it leaves the consumer flake with
+# a deliberately broken app build.
+
+echo "  Adding craneArgs phase overrides to flake.nix..."
+insert_after_anchor 'extraFileset = \.\/migrations;' flake.nix <<'CRANEARGS'
+          craneArgs = {
+            buildCommand = "echo SENTINEL_APP_BUILD_COMMAND";
+            buildCommandPath = "/nonexistent/SENTINEL_APP_BUILD_COMMAND_PATH";
+            buildPhase = "echo SENTINEL_APP_BUILD_PHASE";
+            buildPhaseCargoCommand = "echo SENTINEL_APP_BUILD_PHASE_CARGO";
+            cargoBuildCommand = "echo SENTINEL_APP_CARGO_BUILD";
+            cargoCheckCommand = "echo SENTINEL_APP_CARGO_CHECK";
+            cargoTestCommand = "echo SENTINEL_APP_CARGO_TEST";
+            checkPhase = "echo SENTINEL_APP_CHECK_PHASE";
+            checkPhaseCargoCommand = "echo SENTINEL_APP_CHECK_PHASE_CARGO";
+            dontBuild = "SENTINEL_APP_DONT_BUILD";
+            dontCheck = "SENTINEL_APP_DONT_CHECK";
+            dontConfigure = "SENTINEL_APP_DONT_CONFIGURE";
+            dontDist = "SENTINEL_APP_DONT_DIST";
+            dontFixup = "SENTINEL_APP_DONT_FIXUP";
+            dontInstall = "SENTINEL_APP_DONT_INSTALL";
+            dontPatch = "SENTINEL_APP_DONT_PATCH";
+            dontUnpack = "SENTINEL_APP_DONT_UNPACK";
+            doInstallCargoArtifacts = false;
+            fixupPhase = "echo SENTINEL_APP_FIXUP_PHASE";
+            installPhase = "echo SENTINEL_APP_INSTALL_PHASE";
+            installPhaseCommand = "echo SENTINEL_APP_INSTALL_PHASE_CARGO";
+            meta.description = "SENTINEL_APP_META";
+            outputs = [ "out" "doc" ];
+            phases = "unpackPhase patchPhase installPhase";
+            postInstall = "echo SENTINEL_APP_POST_INSTALL";
+            preFixup = "echo SENTINEL_APP_PRE_FIXUP";
+          };
+CRANEARGS
+commit_all "add craneArgs phase overrides"
 
 app_drv=$(drv_json default)
 deps_drv=$(drv_json cargoArtifacts)
@@ -564,24 +654,11 @@ else
 fi
 
 echo "  Adding cargoArtifactsArgs to flake.nix..."
-awk '
-  /extraFileset = \.\/migrations;/ && !done {
-    print
-    print "          cargoArtifactsArgs = {"
-    print "            buildPhaseCargoCommand = \"echo SENTINEL_DEPS_CHANNEL\";"
-    print "          };"
-    done = 1
-    next
-  }
-  { print }
-  END {
-    if (!done) {
-      print "ERROR: did not find the extraFileset anchor to insert cargoArtifactsArgs after" > "/dev/stderr"
-      exit 1
-    }
-  }
-' flake.nix > flake.nix.new
-mv flake.nix.new flake.nix
+insert_after_anchor 'extraFileset = \.\/migrations;' flake.nix <<'DEPS_ARGS'
+          cargoArtifactsArgs = {
+            buildPhaseCargoCommand = "echo SENTINEL_DEPS_CHANNEL";
+          };
+DEPS_ARGS
 commit_all "add cargoArtifactsArgs deps override"
 
 deps_drv=$(drv_json cargoArtifacts)
