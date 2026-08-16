@@ -103,6 +103,10 @@ nix flake init -t github:JPHutchins/crane-tauri
 - `src` should point at the repo root that contains `src-tauri`
 - `frontend` should be the built web assets, not the source tree
 - `tauri.app` is the final binary package
+- `tauri.wrappedApp` is the same binary wrapped with `wrapGAppsHook3` (Linux;
+  passes through unchanged on macOS) so runtime lookups — pixbuf loaders,
+  GSettings schemas, GIO/TLS modules, the tauri gstreamer prefixes — resolve
+  from the Nix closure instead of ambient environment
 - `tauri.cargoArtifacts` is the reusable crane dependency cache derivation
 - `tauri.commonArgs`, `tauri.tauriConfig`, and `tauri.tauriSubdir` are exposed
   for composing extra checks (clippy, deny) against the same source and config

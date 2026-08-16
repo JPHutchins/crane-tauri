@@ -64,6 +64,7 @@
       {
         checks = {
           inherit (tauri) app;
+          wrapped = tauri.wrappedApp;
 
           clippy = craneLib.cargoClippy (
             tauri.commonArgs
