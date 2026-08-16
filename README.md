@@ -41,6 +41,8 @@ nix flake init -t github:JPHutchins/crane-tauri
 				inherit (pkgs) lib;
 				craneLib = crane.mkLib pkgs;
 
+				# Your frontend, built as an ordinary Nix derivation. Its output
+				# is embedded into the tauri binary by buildTauriApp.
 				frontend = pkgs.buildNpmPackage {
 					pname = "my-app-frontend";
 					version = "0.1.0";
@@ -68,6 +70,13 @@ nix flake init -t github:JPHutchins/crane-tauri
 					'';
 				};
 
+				# buildTauriApp wires cargo/crane around `cargo tauri build`:
+				# appSrc/depsSrc splitting, artifact reuse, and — by default —
+				# bundling. The defaults build `cargo tauri build -b deb`
+				# (Linux) / `-b app` (macOS) and install the bundle contents, so
+				# `tauri.app` contains the binary plus the desktop entry and
+				# icons (Linux) or the .app plus the binary (macOS). Override
+				# tauriBuild/tauriInstall to change that (see Notes).
 				tauri = crane-tauri.lib.buildTauriApp { inherit pkgs craneLib; } {
 					pname = "my-app";
 					version = "0.1.0";
@@ -76,17 +85,26 @@ nix flake init -t github:JPHutchins/crane-tauri
 				};
 			in
 			{
-				packages.default = tauri.app;
+				packages = {
+					# The bundled app (desktop entry, icons, binary).
+					default = tauri.app;
+
+					# The same app wrapped with wrapGAppsHook3 (Linux; passes
+					# through on macOS) so runtime lookups — pixbuf loaders,
+					# GSettings schemas, GIO/TLS modules, gstreamer prefixes —
+					# resolve from the Nix closure.
+					wrapped = tauri.wrappedApp;
+				};
 
 				checks = {
 					inherit (tauri) app;
 
 					# `nix flake check` runs values under `checks`.
+					# Reusing tauri.cargoArtifacts means clippy does not rebuild
+					# all Rust dependencies.
 					clippy = craneLib.cargoClippy (
 						tauri.commonArgs
 						// {
-							# Reuse the dependency cache produced by `buildTauriApp`
-							# so clippy does not rebuild all Rust dependencies.
 							cargoArtifacts = tauri.cargoArtifacts;
 							cargoClippyExtraArgs = "--all-targets -- -D warnings";
 							TAURI_CONFIG = tauri.tauriConfig;
@@ -102,11 +120,13 @@ nix flake init -t github:JPHutchins/crane-tauri
 
 - `src` should point at the repo root that contains `src-tauri`
 - `frontend` should be the built web assets, not the source tree
-- `tauri.app` is the final binary package
-- `tauri.wrappedApp` is the same binary wrapped with `wrapGAppsHook3` (Linux;
-  passes through unchanged on macOS) so runtime lookups — pixbuf loaders,
-  GSettings schemas, GIO/TLS modules, the tauri gstreamer prefixes — resolve
-  from the Nix closure instead of ambient environment
+- `tauri.app` is the final app package — the bundled output: the binary,
+  desktop entry and icons on Linux; the `.app` plus the binary on macOS
+- `tauri.wrappedApp` is the same package wrapped with `wrapGAppsHook3`
+  (Linux; passes through unchanged on macOS) so the runtime lookups of the
+  libraries the lib declares — pixbuf loaders, GSettings schemas, GIO/TLS
+  modules, the tauri gstreamer prefixes — resolve from the Nix closure
+  instead of ambient environment
 - `tauri.cargoArtifacts` is the reusable crane dependency cache derivation
 - `tauri.commonArgs`, `tauri.tauriConfig`, and `tauri.tauriSubdir` are exposed
   for composing extra checks (clippy, deny) against the same source and config
@@ -238,7 +258,7 @@ tauri = crane-tauri.lib.buildTauriApp { inherit pkgs craneLib; } {
   (e.g. `cargoRoot = src;`) when the project doesn't live at a fixed local
   path.
 
-- **No automatic GTK wrapping**: the lib still leaves binary wrapping
-  (`wrapGAppsHook3`, etc.) to consumers in a separate derivation. Adding it
-  to the shared inputs perturbs `PKG_CONFIG_PATH` and invalidates every
-  `-sys` crate fingerprint.
+- **Wrapping is a separate derivation**: `tauri.wrappedApp` wraps with
+  `wrapGAppsHook3` (Linux only). The hook never enters the cargo builds,
+  where its propagated inputs could perturb `PKG_CONFIG_PATH` and invalidate
+  every `-sys` crate fingerprint.
