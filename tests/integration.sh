@@ -231,6 +231,20 @@ app_out_before="$consumer_out"
 
 deps_hash_before=$(cargo_artifacts_out_path)
 
+echo "=== Test 13: bundled outputs are installed ==="
+
+test -x "$consumer_out/bin/tauri-app" || fail "binary missing from the bundled app output"
+
+case "$SYSTEM" in
+*-darwin)
+  test -d "$consumer_out/Applications/tauri-app.app" || fail "no .app bundle in the app output"
+  pass "app bundle and binary installed" ;;
+*)
+  test -n "$(find "$consumer_out/share/applications" -name '*.desktop' -print -quit)" \
+    || fail "no .desktop entry in the app output"
+  pass "deb bundle contents installed (desktop entry and binary present)" ;;
+esac
+
 echo "=== Test 5: Dep caching survives Rust source changes ==="
 
 echo "  Modifying Rust source..."
@@ -508,7 +522,7 @@ case "$app_build_phase" in
 esac
 
 case "$app_build_phase$app_install_phase" in
-*cargo\ tauri\ build*|*find\ target*)
+*cargo\ tauri\ build*|*bundle/deb*)
   fail "default closure leaked alongside the caller's: $app_build_phase $app_install_phase" ;;
 *)
   pass "default closures did not concatenate with the caller's" ;;

@@ -13,6 +13,18 @@ let
   inherit (pkgs) lib;
   inherit (lib) types mkOption;
 
+  # Derived locally rather than read from pkgs.cargo-tauri.hook (a
+  # makeSetupHook substitution — reaching into it couples us to a nixpkgs
+  # implementation detail across versions). Falls back to deb rather than
+  # throwing: the lib must keep evaluating on platforms that never build
+  # here (the old --no-bundle default did).
+  defaultBundleType =
+    {
+      darwin = "app";
+      linux = "deb";
+    }
+    .${pkgs.stdenv.hostPlatform.parsed.kernel.name} or "deb";
+
   defaultTauriBuild =
     {
       configFlag,
@@ -20,7 +32,7 @@ let
       ...
     }:
     ''
-      cargo tauri build --no-bundle \
+      cargo tauri build -b ${defaultBundleType} \
         ${cargoExtraArgs} \
         ${configFlag}
     '';
@@ -30,17 +42,47 @@ let
       binaryName,
       ...
     }:
-    ''
-      binaryPath=$(find target -type f -path ${lib.escapeShellArg "*/release/${binaryName}"} -print -quit)
+    if pkgs.stdenv.hostPlatform.isDarwin then
+      ''
+        mkdir -p "$out/Applications"
 
-      if [ -z "$binaryPath" ]; then
-        echo "failed to locate built binary ${binaryName}" >&2
-        exit 1
-      fi
+        shopt -s nullglob
+        appBundles=(target{,/*}/release/bundle/macos/*.app)
+        shopt -u nullglob
 
-      mkdir -p $out/bin
-      cp "$binaryPath" $out/bin/
-    '';
+        if [ "''${#appBundles[@]}" -eq 0 ]; then
+          echo "crane-tauri: no .app bundles found under target{,/*}/release/bundle/macos" >&2
+          exit 1
+        fi
+
+        mv -- "''${appBundles[@]}" "$out/Applications/"
+
+        # The binary is already inside the .app; the bin/ copy keeps the
+        # $out/bin contract consumers and wrappedApp rely on.
+        binaryPath=$(find target -type f -path "*/release/${binaryName}" -print -quit)
+        if [ -z "$binaryPath" ]; then
+          echo "failed to locate built binary ${binaryName}" >&2
+          exit 1
+        fi
+        mkdir -p "$out/bin"
+        cp "$binaryPath" "$out/bin/"
+      ''
+    else
+      ''
+        shopt -s nullglob
+        bundleContents=(target{,/*}/release/bundle/deb/*/data/usr/*)
+        shopt -u nullglob
+
+        if [ "''${#bundleContents[@]}" -eq 0 ]; then
+          echo "crane-tauri: no deb bundle contents found under target{,/*}/release/bundle/deb" >&2
+          echo "  the default install expects a bundled build — override tauriBuild and" >&2
+          echo "  tauriInstall together if your app does not bundle" >&2
+          exit 1
+        fi
+
+        mkdir -p "$out"
+        cp -a -- "''${bundleContents[@]}" "$out"/
+      '';
 
   optionsModule =
     { config, ... }:
@@ -69,8 +111,9 @@ let
           description = ''
             Cargo binary name to install from target/release. Defaults to pname,
             but the on-disk binary is named by cargo ([package].name in
-            src-tauri/Cargo.toml); set this when they differ, or the install
-            phase fails late with "failed to locate built binary".
+            src-tauri/Cargo.toml); set this when they differ. Used by the
+            macOS install; on Linux the installed binary keeps cargo's name
+            from the deb layout.
           '';
         };
         cargoExtraArgs = mkOption {
@@ -167,11 +210,11 @@ let
             Renders the `cargo tauri build` invocation as a function of the
             computed context (configFlag, cargoExtraArgs, frontendDist,
             tauriSubdir, pname, version, binaryName). The function must accept
-            `...` — the context may gain keys. Defaults to the --no-bundle
-            build. craneArgs.buildPhase / installPhase take precedence over
-            this closure on the app derivation (crane honors them ahead of the
-            assembled phase); buildPhaseCargoCommand / installPhaseCommand
-            do not.
+            `...` — the context may gain keys. Defaults to `cargo tauri build
+            -b deb|app` (the platform bundle type). craneArgs.buildPhase /
+            installPhase take precedence over this closure on the app
+            derivation (crane honors them ahead of the assembled phase);
+            buildPhaseCargoCommand / installPhaseCommand do not.
           '';
         };
         tauriInstall = mkOption {
@@ -180,8 +223,9 @@ let
           description = ''
             Renders the install phase as a function of the computed context
             (same keys as tauriBuild). The function must accept `...`.
-            Defaults to installing the built binary into $out/bin. Same
-            craneArgs precedence as tauriBuild.
+            Defaults to installing the produced bundle (deb contents on
+            Linux; the .app plus the binary on macOS). Same craneArgs
+            precedence as tauriBuild.
           '';
         };
       };
@@ -523,9 +567,8 @@ let
         ];
         installPhase = ''
           runHook preInstall
-          mkdir -p $out/bin
-          cp ${app}/bin/${binaryName} $out/bin/${binaryName}
-          chmod +w $out/bin/${binaryName}
+          cp -a ${app}/. "$out"/
+          chmod +w "$out"/bin/*
           runHook postInstall
         '';
         preFixup = ''
