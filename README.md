@@ -124,9 +124,10 @@ nix flake init -t github:JPHutchins/crane-tauri
   `cargoExtraArgs` is appended
 - `tauriBuild` / `tauriInstall` replace the build and install phase commands:
   closures over the computed context (`configFlag`, `cargoExtraArgs`,
-  `frontendDist`, `manifestPathFlag`, `tauriSubdir`, `pname`, `version`,
-  `binaryName`) that must accept `...` — the context may gain keys. A caller
-  closure replaces the default rather than appending to it
+  `frontendDist`, `tauriSubdir`, `pname`, `version`, `binaryName`) that must
+  accept `...` — the context may gain keys. A caller closure replaces the
+  default rather than appending to it, and `craneArgs.buildPhase` /
+  `installPhase` still take precedence over the closures on the app
 
   ```nix
   tauriBuild = { configFlag, cargoExtraArgs, ... }:
