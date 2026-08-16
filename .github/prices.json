@@ -1,9 +1,23 @@
 {
-  "_comment": "USD per 1,000,000 tokens. PRICES DRIFT — keep _updated current. cost = sum over models of (input*in + output*out + cache_read*cache_read + cache_write*cache_write) / 1e6. The CLI's vendor_cost_usd is vendor-priced and will be wrong for non-Anthropic backends; recompute from this map using the `models` array in the abstract result envelope (SPEC §6.1). Fill the zeros from your provider's pricing page.",
-  "_updated": "2026-07-05",
+  "_comment": "USD per 1,000,000 tokens. DeepSeek UTC time-of-day pricing effective 2026-08-16 16:00 UTC (00:00 Beijing Aug 17): peak = 01:00-04:00 and 06:00-10:00 UTC, off-peak = all other times. cache_write is free. See schema/prices.schema.json for the slot rules.",
+  "_updated": "2026-08-16",
   "_unit": "USD per 1M tokens",
   "models": {
-    "deepseek-v4-pro": { "in": 0.435, "out": 0.87, "cache_read": 0.003625, "cache_write": 0.0 },
-    "deepseek-v4-flash": { "in": 0.14, "out": 0.28, "cache_read": 0.0028, "cache_write": 0.0 }
+    "deepseek-v4-pro": {
+      "slots": [
+        { "utc_from": "10:00", "utc_to": "01:00", "in": 0.66, "out": 1.98, "cache_read": 0.022, "cache_write": 0.0 },
+        { "utc_from": "01:00", "utc_to": "04:00", "in": 1.32, "out": 3.96, "cache_read": 0.044, "cache_write": 0.0 },
+        { "utc_from": "04:00", "utc_to": "06:00", "in": 0.66, "out": 1.98, "cache_read": 0.022, "cache_write": 0.0 },
+        { "utc_from": "06:00", "utc_to": "10:00", "in": 1.32, "out": 3.96, "cache_read": 0.044, "cache_write": 0.0 }
+      ]
+    },
+    "deepseek-v4-flash": {
+      "slots": [
+        { "utc_from": "10:00", "utc_to": "01:00", "in": 0.22, "out": 0.66, "cache_read": 0.007, "cache_write": 0.0 },
+        { "utc_from": "01:00", "utc_to": "04:00", "in": 0.44, "out": 1.32, "cache_read": 0.014, "cache_write": 0.0 },
+        { "utc_from": "04:00", "utc_to": "06:00", "in": 0.22, "out": 0.66, "cache_read": 0.007, "cache_write": 0.0 },
+        { "utc_from": "06:00", "utc_to": "10:00", "in": 0.44, "out": 1.32, "cache_read": 0.014, "cache_write": 0.0 }
+      ]
+    }
   }
 }
