@@ -2,14 +2,24 @@ name: Cache warm
 
 on:
   schedule:
-    # Weekly (Monday, 07:23 UTC): re-build the exact suite CI runs so the
-    # magic-nix-cache backend keeps the entries CI depends on fresh (unused
-    # entries expire) and neither matrix leg ever starts from a cold cache.
-    - cron: '23 7 * * 1'
+    # Twice weekly (Mon/Thu, 07:23 UTC): re-build the exact suite CI runs so
+    # the magic-nix-cache backend keeps the entries CI depends on fresh
+    # (unused entries expire) and neither matrix leg starts from a cold
+    # cache. Twice a week gives slack against the ~7-day entry retention.
+    - cron: '23 7 * * 1,4'
+  # Edits to this file re-arm the schedule (GitHub auto-disables
+  # schedule-only workflows after 60 days of repo inactivity).
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/cache-warm.yaml'
   workflow_dispatch: {}
 
 permissions:
   contents: read
+  # magic-nix-cache needs id-token to authenticate against its cache backend;
+  # without it the warm job would build but never push.
+  id-token: write
 
 concurrency:
   group: cache-warm
@@ -31,10 +41,21 @@ jobs:
       - run: |
           set -euo pipefail
           mkdir -p ci-logs
+          # The fixture checks (app, clippy, fmt, nixfmt) CI's fixture-check
+          # job runs, then the integration suite — everything CI consumes.
+          nix flake check ./fixtures/tauri-app -L 2>&1 | tee "ci-logs/cache-warm-fixture-${{ matrix.os }}.log"
           CI_LOG_DIR="$PWD/ci-logs" ./tests/integration.sh 2>&1 | tee "ci-logs/cache-warm-${{ matrix.os }}.log"
       - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
+          name: cache-warm-${{ matrix.os }}.log
           path: ci-logs/cache-warm-${{ matrix.os }}.log
+          if-no-files-found: ignore
+          archive: false
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cache-warm-fixture-${{ matrix.os }}.log
+          path: ci-logs/cache-warm-fixture-${{ matrix.os }}.log
           if-no-files-found: ignore
           archive: false
