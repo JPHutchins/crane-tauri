@@ -117,11 +117,12 @@ jobs:
           path: ci-logs/integration-relocation-${{ matrix.os }}.log
           if-no-files-found: ignore
           archive: false
-      # The per-test build logs, whatever subset the suite produced — uploaded
-      # as individual artifacts (archive: false) straight from the log dir.
+      # The per-test build logs, whatever subset the suite produced, as one
+      # zipped artifact (archive: false requires exactly one file; a directory
+      # with default archiving zips the whole set).
       - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
+          name: integration-build-logs-${{ matrix.os }}
           path: ci-logs/integration-${{ matrix.os }}/
           if-no-files-found: ignore
-          archive: false
