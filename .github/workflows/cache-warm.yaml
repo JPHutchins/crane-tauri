@@ -1,0 +1,40 @@
+name: Cache warm
+
+on:
+  schedule:
+    # Weekly (Monday, 07:23 UTC): re-build the exact suite CI runs so the
+    # magic-nix-cache backend keeps the entries CI depends on fresh (unused
+    # entries expire) and neither matrix leg ever starts from a cold cache.
+    - cron: '23 7 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-warm
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          CI_LOG_DIR="$PWD/ci-logs" ./tests/integration.sh 2>&1 | tee "ci-logs/cache-warm-${{ matrix.os }}.log"
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: ci-logs/cache-warm-${{ matrix.os }}.log
+          if-no-files-found: ignore
+          archive: false
