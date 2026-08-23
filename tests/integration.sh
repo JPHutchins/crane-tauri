@@ -137,11 +137,17 @@ rm -f "$WORKDIR/flake.nix" "$WORKDIR/flake.lock"
 # Pin the consumer's inputs to the fixture's committed lock rather than
 # resolving default branches at test time: two matrix legs can lock different
 # revisions minutes apart, and a drifted crane/nixpkgs changes the deps drv
-# hash without any real cache regression (#16).
-fixture_meta=$(nix flake metadata --json "$FIXTURE")
-nixpkgs_rev=$(jq -r '.locks.nodes.nixpkgs.locked.rev' <<<"$fixture_meta")
-crane_rev=$(jq -r '.locks.nodes.crane.locked.rev' <<<"$fixture_meta")
-flake_utils_rev=$(jq -r '.locks.nodes["flake-utils"].locked.rev' <<<"$fixture_meta")
+# hash without any real cache regression (#16). Read the lock file directly
+# (no nix spawn) and fail loudly on a missing node instead of emitting a
+# `github:…/null` URL.
+nixpkgs_rev=$(jq -r '.nodes.nixpkgs.locked.rev' "$FIXTURE/flake.lock")
+crane_rev=$(jq -r '.nodes.crane.locked.rev' "$FIXTURE/flake.lock")
+flake_utils_rev=$(jq -r '.nodes["flake-utils"].locked.rev' "$FIXTURE/flake.lock")
+for rev_name in nixpkgs_rev crane_rev flake_utils_rev; do
+  if [ -z "${!rev_name}" ]; then
+    fail "fixture flake.lock is missing the ${rev_name%_rev} input — cannot pin the consumer"
+  fi
+done
 
 cat > "$WORKDIR/flake.nix" << 'FLAKE_NIX'
 {
@@ -226,6 +232,9 @@ replace_in_file "s|CRANE_TAURI_URL_PLACEHOLDER|path:$LIB_SNAPSHOT|" "$WORKDIR/fl
 replace_in_file "s|NIXPKGS_REV_PLACEHOLDER|$nixpkgs_rev|" "$WORKDIR/flake.nix"
 replace_in_file "s|CRANE_REV_PLACEHOLDER|$crane_rev|" "$WORKDIR/flake.nix"
 replace_in_file "s|FLAKE_UTILS_REV_PLACEHOLDER|$flake_utils_rev|" "$WORKDIR/flake.nix"
+if grep -Fq '_PLACEHOLDER' "$WORKDIR/flake.nix"; then
+  fail "consumer flake still contains an unsubstituted placeholder"
+fi
 
 cd "$WORKDIR"
 git init -q

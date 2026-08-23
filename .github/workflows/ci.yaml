@@ -100,15 +100,6 @@ jobs:
       - if: ${{ always() }}
         run: |
           set -euo pipefail
-          for log in build-initial.log build-source-change.log build-manifest-change.log \
-            build-monorepo.log build-monorepo-sibling-change.log build-extrafileset-change.log; do
-            if [ -f "ci-logs/integration-${{ matrix.os }}/$log" ]; then
-              cp "ci-logs/integration-${{ matrix.os }}/$log" "ci-logs/integration-${log%.log}-${{ matrix.os }}.log"
-            fi
-          done
-      - if: ${{ always() }}
-        run: |
-          set -euo pipefail
           relocation_log="ci-logs/integration-relocation-${{ matrix.os }}.log"
           grep 'tauri-relocate:' "ci-logs/integration-${{ matrix.os }}.log" > "$relocation_log" || true
           if [ ! -s "$relocation_log" ]; then
@@ -126,21 +117,11 @@ jobs:
           path: ci-logs/integration-relocation-${{ matrix.os }}.log
           if-no-files-found: ignore
           archive: false
+      # The per-test build logs, whatever subset the suite produced — uploaded
+      # as individual artifacts (archive: false) straight from the log dir.
       - if: ${{ always() }}
         uses: actions/upload-artifact@v7
         with:
-          path: ci-logs/integration-build-initial-${{ matrix.os }}.log
-          if-no-files-found: ignore
-          archive: false
-      - if: ${{ always() }}
-        uses: actions/upload-artifact@v7
-        with:
-          path: ci-logs/integration-build-source-change-${{ matrix.os }}.log
-          if-no-files-found: ignore
-          archive: false
-      - if: ${{ always() }}
-        uses: actions/upload-artifact@v7
-        with:
-          path: ci-logs/integration-build-manifest-change-${{ matrix.os }}.log
+          path: ci-logs/integration-${{ matrix.os }}/
           if-no-files-found: ignore
           archive: false
