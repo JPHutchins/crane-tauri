@@ -134,16 +134,25 @@ done
 
 rm -f "$WORKDIR/flake.nix" "$WORKDIR/flake.lock"
 
+# Pin the consumer's inputs to the fixture's committed lock rather than
+# resolving default branches at test time: two matrix legs can lock different
+# revisions minutes apart, and a drifted crane/nixpkgs changes the deps drv
+# hash without any real cache regression (#16).
+fixture_meta=$(nix flake metadata --json "$FIXTURE")
+nixpkgs_rev=$(jq -r '.locks.nodes.nixpkgs.locked.rev' <<<"$fixture_meta")
+crane_rev=$(jq -r '.locks.nodes.crane.locked.rev' <<<"$fixture_meta")
+flake_utils_rev=$(jq -r '.locks.nodes["flake-utils"].locked.rev' <<<"$fixture_meta")
+
 cat > "$WORKDIR/flake.nix" << 'FLAKE_NIX'
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    crane.url = "github:ipetkov/crane";
+    nixpkgs.url = "github:NixOS/nixpkgs/NIXPKGS_REV_PLACEHOLDER";
+    crane.url = "github:ipetkov/crane/CRANE_REV_PLACEHOLDER";
     crane-tauri = {
       url = "CRANE_TAURI_URL_PLACEHOLDER";
       inputs = { };
     };
-    flake-utils.url = "github:numtide/flake-utils";
+    flake-utils.url = "github:numtide/flake-utils/FLAKE_UTILS_REV_PLACEHOLDER";
   };
 
   outputs =
@@ -214,6 +223,9 @@ cat > "$WORKDIR/flake.nix" << 'FLAKE_NIX'
 FLAKE_NIX
 
 replace_in_file "s|CRANE_TAURI_URL_PLACEHOLDER|path:$LIB_SNAPSHOT|" "$WORKDIR/flake.nix"
+replace_in_file "s|NIXPKGS_REV_PLACEHOLDER|$nixpkgs_rev|" "$WORKDIR/flake.nix"
+replace_in_file "s|CRANE_REV_PLACEHOLDER|$crane_rev|" "$WORKDIR/flake.nix"
+replace_in_file "s|FLAKE_UTILS_REV_PLACEHOLDER|$flake_utils_rev|" "$WORKDIR/flake.nix"
 
 cd "$WORKDIR"
 git init -q

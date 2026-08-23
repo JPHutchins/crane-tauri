@@ -100,7 +100,8 @@ jobs:
       - if: ${{ always() }}
         run: |
           set -euo pipefail
-          for log in build-initial.log build-source-change.log build-manifest-change.log; do
+          for log in build-initial.log build-source-change.log build-manifest-change.log \
+            build-monorepo.log build-monorepo-sibling-change.log build-extrafileset-change.log; do
             if [ -f "ci-logs/integration-${{ matrix.os }}/$log" ]; then
               cp "ci-logs/integration-${{ matrix.os }}/$log" "ci-logs/integration-${log%.log}-${{ matrix.os }}.log"
             fi
