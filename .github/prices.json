@@ -1,22 +1,98 @@
 {
-  "_comment": "USD per 1,000,000 tokens. DeepSeek UTC time-of-day pricing effective 2026-08-16 16:00 UTC (00:00 Beijing Aug 17): peak = 01:00-04:00 and 06:00-10:00 UTC, off-peak = all other times. cache_write is free. See schema/prices.schema.json for the slot rules.",
-  "_updated": "2026-08-16",
+  "_comment": "USD per 1,000,000 tokens. DeepSeek UTC time-of-day pricing effective 2026-08-16 16:00 UTC (00:00 Beijing Aug 17): peak = 01:00-04:00 and 06:00-10:00 UTC, off-peak = all other times. Effective 2026-08-22 16:00 UTC (00:00 Beijing Aug 23) that applies on WEEKDAYS only \u2014 Saturdays and Sundays in Beijing time are off-peak all day, which is `weekend_slots`. The Beijing weekend runs Friday 16:00 UTC to Sunday 16:00 UTC, so it is not a property of the UTC date. cache_write is free. See schema/prices.schema.json for the slot rules.",
+  "_updated": "2026-08-22",
   "_unit": "USD per 1M tokens",
   "models": {
     "deepseek-v4-pro": {
       "slots": [
-        { "utc_from": "10:00", "utc_to": "01:00", "in": 0.66, "out": 1.98, "cache_read": 0.022, "cache_write": 0.0 },
-        { "utc_from": "01:00", "utc_to": "04:00", "in": 1.32, "out": 3.96, "cache_read": 0.044, "cache_write": 0.0 },
-        { "utc_from": "04:00", "utc_to": "06:00", "in": 0.66, "out": 1.98, "cache_read": 0.022, "cache_write": 0.0 },
-        { "utc_from": "06:00", "utc_to": "10:00", "in": 1.32, "out": 3.96, "cache_read": 0.044, "cache_write": 0.0 }
+        {
+          "utc_from": "10:00",
+          "utc_to": "01:00",
+          "in": 0.66,
+          "out": 1.98,
+          "cache_read": 0.022,
+          "cache_write": 0.0
+        },
+        {
+          "utc_from": "01:00",
+          "utc_to": "04:00",
+          "in": 1.32,
+          "out": 3.96,
+          "cache_read": 0.044,
+          "cache_write": 0.0
+        },
+        {
+          "utc_from": "04:00",
+          "utc_to": "06:00",
+          "in": 0.66,
+          "out": 1.98,
+          "cache_read": 0.022,
+          "cache_write": 0.0
+        },
+        {
+          "utc_from": "06:00",
+          "utc_to": "10:00",
+          "in": 1.32,
+          "out": 3.96,
+          "cache_read": 0.044,
+          "cache_write": 0.0
+        }
+      ],
+      "weekend_slots": [
+        {
+          "utc_from": "00:00",
+          "utc_to": "00:00",
+          "in": 0.66,
+          "out": 1.98,
+          "cache_read": 0.022,
+          "cache_write": 0.0
+        }
       ]
     },
     "deepseek-v4-flash": {
       "slots": [
-        { "utc_from": "10:00", "utc_to": "01:00", "in": 0.22, "out": 0.66, "cache_read": 0.007, "cache_write": 0.0 },
-        { "utc_from": "01:00", "utc_to": "04:00", "in": 0.44, "out": 1.32, "cache_read": 0.014, "cache_write": 0.0 },
-        { "utc_from": "04:00", "utc_to": "06:00", "in": 0.22, "out": 0.66, "cache_read": 0.007, "cache_write": 0.0 },
-        { "utc_from": "06:00", "utc_to": "10:00", "in": 0.44, "out": 1.32, "cache_read": 0.014, "cache_write": 0.0 }
+        {
+          "utc_from": "10:00",
+          "utc_to": "01:00",
+          "in": 0.22,
+          "out": 0.66,
+          "cache_read": 0.007,
+          "cache_write": 0.0
+        },
+        {
+          "utc_from": "01:00",
+          "utc_to": "04:00",
+          "in": 0.44,
+          "out": 1.32,
+          "cache_read": 0.014,
+          "cache_write": 0.0
+        },
+        {
+          "utc_from": "04:00",
+          "utc_to": "06:00",
+          "in": 0.22,
+          "out": 0.66,
+          "cache_read": 0.007,
+          "cache_write": 0.0
+        },
+        {
+          "utc_from": "06:00",
+          "utc_to": "10:00",
+          "in": 0.44,
+          "out": 1.32,
+          "cache_read": 0.014,
+          "cache_write": 0.0
+        }
+      ],
+      "weekend_slots": [
+        {
+          "utc_from": "00:00",
+          "utc_to": "00:00",
+          "in": 0.22,
+          "out": 0.66,
+          "cache_read": 0.007,
+          "cache_write": 0.0
+        }
       ]
     }
   }
