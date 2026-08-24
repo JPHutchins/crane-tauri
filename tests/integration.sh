@@ -27,6 +27,10 @@ replace_in_file() {
 
   temp_file=$(mktemp)
   sed "$expression" "$file" > "$temp_file"
+  if cmp -s "$temp_file" "$file"; then
+    rm -f "$temp_file"
+    fail "replace_in_file: expression did not match anything: $expression"
+  fi
   mv "$temp_file" "$file"
 }
 
@@ -90,7 +94,11 @@ assert_log_lacks() {
 }
 
 echo "=== Test 1: Build fixture app ==="
-app_out=$(run_verbose nix build "${NIX_BUILD_ARGS[@]}" "$FIXTURE" --print-out-paths)
+# --no-write-lock-file keeps the committed flake.lock authoritative: without
+# it nix re-resolves the branch refs and rewrites the lock in the workspace,
+# and Test 4 would pin the consumer to whatever this leg just regenerated
+# instead of the committed revision (#16).
+app_out=$(run_verbose nix build --no-write-lock-file "${NIX_BUILD_ARGS[@]}" "$FIXTURE" --print-out-paths)
 test -x "$app_out/bin/tauri-app" || fail "binary not found or not executable"
 pass "fixture binary builds"
 
@@ -99,7 +107,7 @@ grep -qaFR "vite.svg" "$app_out/bin/tauri-app" || fail "frontend not embedded in
 pass "frontend assets are embedded"
 
 echo "=== Test 3: Frontend builds independently ==="
-frontend_out=$(run_verbose nix build "${NIX_BUILD_ARGS[@]}" "$FIXTURE#frontend" --print-out-paths)
+frontend_out=$(run_verbose nix build --no-write-lock-file "${NIX_BUILD_ARGS[@]}" "$FIXTURE#frontend" --print-out-paths)
 test -f "$frontend_out/index.html" || fail "frontend index.html missing"
 test -d "$frontend_out/assets" || fail "frontend assets/ missing"
 pass "frontend builds independently"
@@ -132,18 +140,34 @@ for path in Cargo.lock Cargo.toml build.rs tauri.conf.json capabilities icons sr
   cp -r "$FIXTURE/src-tauri/$path" "$WORKDIR/src-tauri/$path"
 done
 
-rm -f "$WORKDIR/flake.nix" "$WORKDIR/flake.lock"
+# Pin the consumer's inputs to the fixture's committed lock rather than
+# resolving default branches at test time: two matrix legs can lock different
+# revisions minutes apart, and a drifted crane/nixpkgs changes the deps drv
+# hash without any real cache regression (#16). Read the COMMITTED lock via
+# git — Test 1 may have rewritten the workspace copy even with
+# --no-write-lock-file — and fail loudly on a missing node instead of
+# emitting a `github:…/null` URL (jq -r prints the literal "null" for a
+# missing key, so the guard must check both).
+fixture_lock=$(git -C "$REPO_ROOT" show HEAD:fixtures/tauri-app/flake.lock)
+nixpkgs_rev=$(jq -er '.nodes.nixpkgs.locked.rev // empty' <<<"$fixture_lock")
+crane_rev=$(jq -er '.nodes.crane.locked.rev // empty' <<<"$fixture_lock")
+flake_utils_rev=$(jq -er '.nodes["flake-utils"].locked.rev // empty' <<<"$fixture_lock")
+for rev_name in nixpkgs_rev crane_rev flake_utils_rev; do
+  if [ -z "${!rev_name}" ]; then
+    fail "fixture flake.lock is missing the ${rev_name%_rev} input — cannot pin the consumer"
+  fi
+done
 
 cat > "$WORKDIR/flake.nix" << 'FLAKE_NIX'
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    crane.url = "github:ipetkov/crane";
+    nixpkgs.url = "github:NixOS/nixpkgs/NIXPKGS_REV_PLACEHOLDER";
+    crane.url = "github:ipetkov/crane/CRANE_REV_PLACEHOLDER";
     crane-tauri = {
       url = "CRANE_TAURI_URL_PLACEHOLDER";
       inputs = { };
     };
-    flake-utils.url = "github:numtide/flake-utils";
+    flake-utils.url = "github:numtide/flake-utils/FLAKE_UTILS_REV_PLACEHOLDER";
   };
 
   outputs =
@@ -214,6 +238,9 @@ cat > "$WORKDIR/flake.nix" << 'FLAKE_NIX'
 FLAKE_NIX
 
 replace_in_file "s|CRANE_TAURI_URL_PLACEHOLDER|path:$LIB_SNAPSHOT|" "$WORKDIR/flake.nix"
+replace_in_file "s|NIXPKGS_REV_PLACEHOLDER|$nixpkgs_rev|" "$WORKDIR/flake.nix"
+replace_in_file "s|CRANE_REV_PLACEHOLDER|$crane_rev|" "$WORKDIR/flake.nix"
+replace_in_file "s|FLAKE_UTILS_REV_PLACEHOLDER|$flake_utils_rev|" "$WORKDIR/flake.nix"
 
 cd "$WORKDIR"
 git init -q
