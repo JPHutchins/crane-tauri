@@ -29,7 +29,7 @@ jobs:
       api_base_url:  ${{ vars.API_BASE_URL }}
       model_full:    deepseek-v4-pro[1m]
       model_mechanic: deepseek-v4-pro[1m]
-      subagent_model: deepseek-v4-flash[1m]   # finder fan-out runs on flash; the main agent adjudicates on model_full
+      subagent_model: deepseek-flash[1m]   # finder fan-out runs on flash; the main agent adjudicates on model_full
       scope:         ${{ vars.SCOPE }}   # empty ⇒ the reviewer infers scope from the README's first paragraph (#139)
       mechanic_time_limit: 3m
       mechanic_grace_period: 90s
