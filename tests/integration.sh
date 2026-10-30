@@ -89,6 +89,21 @@ assert_log_lacks() {
   fi
 }
 
+# Captured before grepping: a failing path-info inside the `if` would feed grep
+# nothing and pass.
+assert_closure_lacks_vendored_sources() {
+  local out_path="$1"
+  local description="$2"
+  local closure
+
+  closure=$(nix path-info -r "$out_path")
+  if printf '%s\n' "$closure" | grep -E '/[a-z0-9]{32}-(vendor-cargo-deps|vendor-registry|cargo-package-.+)$'; then
+    fail "$description"
+  else
+    pass "$description"
+  fi
+}
+
 echo "=== Test 1: Build fixture app ==="
 app_out=$(run_verbose nix build "${NIX_BUILD_ARGS[@]}" "$FIXTURE" --print-out-paths)
 test -x "$app_out/bin/tauri-app" || fail "binary not found or not executable"
@@ -103,6 +118,9 @@ frontend_out=$(run_verbose nix build "${NIX_BUILD_ARGS[@]}" "$FIXTURE#frontend" 
 test -f "$frontend_out/index.html" || fail "frontend index.html missing"
 test -d "$frontend_out/assets" || fail "frontend assets/ missing"
 pass "frontend builds independently"
+
+echo "=== Test 14: runtime closures exclude the vendored crate sources ==="
+assert_closure_lacks_vendored_sources "$app_out" "fixture app closure excludes the vendored crate sources"
 
 echo "=== Test 4: Fresh consumer project builds ==="
 
@@ -470,6 +488,8 @@ case "$SYSTEM" in
   grep -qaFR "vite.svg" "$wrapped_out/bin/" || fail "wrappedApp binary lost the embedded frontend marker"
   pass "wrappedApp wraps the real ELF with the GApps environment" ;;
 esac
+
+assert_closure_lacks_vendored_sources "$wrapped_out" "wrappedApp closure excludes the vendored crate sources"
 
 echo "=== Test 11: tauriBuild/tauriInstall closures replace the defaults ==="
 
