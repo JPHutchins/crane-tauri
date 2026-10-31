@@ -475,6 +475,8 @@ let
     "checkPhase"
     "checkPhaseCargoCommand"
     "doInstallCargoArtifacts"
+    "doNotRemoveReferencesToRustToolchain"
+    "doNotRemoveReferencesToVendorDir"
     "dontBuild"
     "dontCheck"
     "dontConfigure"
@@ -530,7 +532,11 @@ let
       cargoArtifacts = resolvedCargoArtifacts;
       TAURI_CONFIG = tauriConfig;
 
-      nativeBuildInputs = appArgs.nativeBuildInputs ++ [ pkgs.cargo-tauri ];
+      nativeBuildInputs = appArgs.nativeBuildInputs ++ [
+        pkgs.cargo-tauri
+        craneLib.removeReferencesToRustToolchainHook
+        craneLib.removeReferencesToVendoredSourcesHook
+      ];
 
       buildPhaseCargoCommand = renderedTauriBuild;
 
