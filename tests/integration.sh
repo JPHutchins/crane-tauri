@@ -81,15 +81,21 @@ assert_log_lacks() {
   local pattern="$1"
   local log_file="$2"
   local description="$3"
+  local grep_status=0
 
-  if grep -Eq "$pattern" "$log_file"; then
-    fail "$description"
-  else
-    pass "$description"
-  fi
+  grep -Eq "$pattern" "$log_file" || grep_status=$?
+  case "$grep_status" in
+  1) pass "$description" ;;
+  0) fail "$description" ;;
+  *) fail "$description (grep exited $grep_status)" ;;
+  esac
 }
 
 VENDORED_SOURCE_PATTERN='/[a-z0-9]{32}-(vendor-cargo-deps|vendor-registry|cargo-package-.+|cargo-src-.+)$'
+
+ere_escape() {
+  printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\&/g'
+}
 
 # The closure is captured first so a failing path-info aborts under set -e, and
 # grep's status is matched exhaustively so a broken pattern (exit 2) fails
@@ -103,7 +109,7 @@ assert_closure() {
   local matches
   local grep_status=0
 
-  closure=$(nix path-info -r "$out_path")
+  closure=$(run_verbose nix path-info -r "$out_path")
   matches=$(printf '%s\n' "$closure" | grep -E "$pattern") || grep_status=$?
   case "$expected:$grep_status" in
   contains:0 | lacks:1) pass "$description" ;;
@@ -504,7 +510,7 @@ case "$SYSTEM" in
   assert_closure lacks "$VENDORED_SOURCE_PATTERN" "$wrapped_out" "wrappedApp closure excludes the vendored crate sources" ;;
 esac
 
-echo "=== Test 15: runtime closure excludes the Rust toolchain ==="
+echo "=== Test 15: consumer app closure excludes the Rust toolchain and vendored sources ==="
 
 # nixpkgs' rustc ships no rust-src, so std panic locations never name the
 # toolchain here; embed its sysroot path so the strip has a reference to remove.
@@ -532,19 +538,26 @@ EOF
 commit_all "embed the toolchain sysroot path"
 
 toolchain_out=$(run_verbose nix build "${NIX_BUILD_ARGS[@]}" .#default --print-out-paths)
-sysroot_marker=$(grep -aoE -m1 'crane-tauri-sysroot=/[^;]*;' "$toolchain_out/bin/tauri-app") \
+sysroot_markers=$(grep -aoE 'crane-tauri-sysroot=/[^;]*;' "$toolchain_out/bin/tauri-app") \
   || fail "sysroot marker not embedded in the binary"
 
-case "$sysroot_marker" in
-*/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-*)
-  pass "toolchain sysroot reference rewritten ($sysroot_marker)" ;;
-*)
-  fail "toolchain sysroot reference left intact: $sysroot_marker" ;;
-esac
+while IFS= read -r sysroot_marker; do
+  case "$sysroot_marker" in
+  */eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-*) ;;
+  *) fail "toolchain sysroot reference left intact: $sysroot_marker" ;;
+  esac
+done <<<"$sysroot_markers"
+pass "every toolchain sysroot reference rewritten ($sysroot_markers)"
 
-sysroot_name=${sysroot_marker##*/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-}
-sysroot_name=${sysroot_name%%[/;]*}
-assert_closure lacks "/[a-z0-9]{32}-${sysroot_name}\$" "$toolchain_out" "app closure excludes the Rust toolchain ($sysroot_name)"
+sysroot_name=$(printf '%s\n' "$sysroot_markers" | sed -n '1s|.*/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-\([^/;]*\).*|\1|p')
+[ -n "$sysroot_name" ] || fail "could not read the toolchain name from the sysroot marker: $sysroot_markers"
+assert_closure lacks "/[a-z0-9]{32}-$(ere_escape "$sysroot_name")\$" "$toolchain_out" "app closure excludes the Rust toolchain ($sysroot_name)"
+
+# Anchored on the consumer's own vendor dir: its crane input floats, unlike the
+# fixture's locked one that Test 14 anchors on.
+consumer_vendor_dir=$(run_verbose nix build "${NIX_BUILD_ARGS[@]}" .#default.cargoVendorDir --print-out-paths)
+assert_closure contains "$VENDORED_SOURCE_PATTERN" "$consumer_vendor_dir" "consumer's vendor dir matches the vendored-source pattern"
+assert_closure lacks "$VENDORED_SOURCE_PATTERN" "$toolchain_out" "consumer app closure excludes the vendored crate sources"
 
 echo "=== Test 11: tauriBuild/tauriInstall closures replace the defaults ==="
 
@@ -730,6 +743,15 @@ if [ -z "$deps_leaked_keys" ]; then
 else
   fail "craneArgs phase keys leaked into the deps derivation: $deps_leaked_keys"
 fi
+
+app_toolchain_opt_out=$(drv_env doNotRemoveReferencesToRustToolchain "$app_drv")
+app_vendor_dir_opt_out=$(drv_env doNotRemoveReferencesToVendorDir "$app_drv")
+case "$app_toolchain_opt_out:$app_vendor_dir_opt_out" in
+SENTINEL_APP_DO_NOT_REMOVE_TOOLCHAIN:SENTINEL_APP_DO_NOT_REMOVE_VENDOR_DIR)
+  pass "the doNot* reference-stripping opt-outs reach the app derivation" ;;
+*)
+  fail "doNot* opt-outs missing from the app derivation: '$app_toolchain_opt_out' '$app_vendor_dir_opt_out'" ;;
+esac
 
 # buildDepsOnly force-sets doInstallCargoArtifacts = true so the cache is always
 # published, and its cleanedArgs drop `outputs` — both hold for current crane,
