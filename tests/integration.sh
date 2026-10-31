@@ -89,19 +89,28 @@ assert_log_lacks() {
   fi
 }
 
-# Captured before grepping: a failing path-info inside the `if` would feed grep
-# nothing and pass.
-assert_closure_lacks_vendored_sources() {
-  local out_path="$1"
-  local description="$2"
+VENDORED_SOURCE_PATTERN='/[a-z0-9]{32}-(vendor-cargo-deps|vendor-registry|cargo-package-.+|cargo-src-.+)$'
+
+# The closure is captured first so a failing path-info aborts under set -e, and
+# grep's status is matched exhaustively so a broken pattern (exit 2) fails
+# instead of reading as "no match".
+assert_closure() {
+  local expected="$1"
+  local pattern="$2"
+  local out_path="$3"
+  local description="$4"
   local closure
+  local matches
+  local grep_status=0
 
   closure=$(nix path-info -r "$out_path")
-  if printf '%s\n' "$closure" | grep -E '/[a-z0-9]{32}-(vendor-cargo-deps|vendor-registry|cargo-package-.+)$'; then
-    fail "$description"
-  else
-    pass "$description"
-  fi
+  matches=$(printf '%s\n' "$closure" | grep -E "$pattern") || grep_status=$?
+  case "$expected:$grep_status" in
+  contains:0 | lacks:1) pass "$description" ;;
+  lacks:0) printf '%s\n' "$matches" >&2; fail "$description" ;;
+  contains:1) fail "$description" ;;
+  *) fail "$description (grep exited $grep_status)" ;;
+  esac
 }
 
 echo "=== Test 1: Build fixture app ==="
@@ -120,7 +129,12 @@ test -d "$frontend_out/assets" || fail "frontend assets/ missing"
 pass "frontend builds independently"
 
 echo "=== Test 14: runtime closures exclude the vendored crate sources ==="
-assert_closure_lacks_vendored_sources "$app_out" "fixture app closure excludes the vendored crate sources"
+
+# The pattern must first match crane's own vendor dir, so a crane rename fails
+# here instead of turning the absence checks into vacuous passes.
+vendor_dir=$(run_verbose nix build "${NIX_BUILD_ARGS[@]}" "$FIXTURE#packages.$SYSTEM.default.cargoVendorDir" --print-out-paths)
+assert_closure contains "$VENDORED_SOURCE_PATTERN" "$vendor_dir" "crane's vendor dir matches the vendored-source pattern"
+assert_closure lacks "$VENDORED_SOURCE_PATTERN" "$app_out" "fixture app closure excludes the vendored crate sources"
 
 echo "=== Test 4: Fresh consumer project builds ==="
 
@@ -486,10 +500,51 @@ case "$SYSTEM" in
   grep -qaFR "WEBKIT_GST_ALLOWED_URI_PROTOCOLS" "$wrapped_out/bin/tauri-app" \
     || fail "wrappedApp wrapper does not set the gstreamer env"
   grep -qaFR "vite.svg" "$wrapped_out/bin/" || fail "wrappedApp binary lost the embedded frontend marker"
-  pass "wrappedApp wraps the real ELF with the GApps environment" ;;
+  pass "wrappedApp wraps the real ELF with the GApps environment"
+  assert_closure lacks "$VENDORED_SOURCE_PATTERN" "$wrapped_out" "wrappedApp closure excludes the vendored crate sources" ;;
 esac
 
-assert_closure_lacks_vendored_sources "$wrapped_out" "wrappedApp closure excludes the vendored crate sources"
+echo "=== Test 15: runtime closure excludes the Rust toolchain ==="
+
+# nixpkgs' rustc ships no rust-src, so std panic locations never name the
+# toolchain here; embed its sysroot path so the strip has a reference to remove.
+# `;` ends the marker because store path names cannot contain it.
+insert_after_anchor '^fn main' src-tauri/build.rs <<'EOF'
+    println!(
+        "cargo:rustc-env=CRANE_TAURI_SYSROOT={sysroot}",
+        sysroot = String::from_utf8(
+            std::process::Command::new(std::env::var("RUSTC").unwrap())
+                .args(["--print", "sysroot"])
+                .output()
+                .unwrap()
+                .stdout
+        )
+        .unwrap()
+        .trim()
+    );
+EOF
+insert_after_anchor '^pub fn run' src-tauri/src/lib.rs <<'EOF'
+    println!(
+        "{marker}",
+        marker = concat!("crane-tauri-sysroot=", env!("CRANE_TAURI_SYSROOT"), ";")
+    );
+EOF
+commit_all "embed the toolchain sysroot path"
+
+toolchain_out=$(run_verbose nix build "${NIX_BUILD_ARGS[@]}" .#default --print-out-paths)
+sysroot_marker=$(grep -aoE -m1 'crane-tauri-sysroot=/[^;]*;' "$toolchain_out/bin/tauri-app") \
+  || fail "sysroot marker not embedded in the binary"
+
+case "$sysroot_marker" in
+*/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-*)
+  pass "toolchain sysroot reference rewritten ($sysroot_marker)" ;;
+*)
+  fail "toolchain sysroot reference left intact: $sysroot_marker" ;;
+esac
+
+sysroot_name=${sysroot_marker##*/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-}
+sysroot_name=${sysroot_name%%[/;]*}
+assert_closure lacks "/[a-z0-9]{32}-${sysroot_name}\$" "$toolchain_out" "app closure excludes the Rust toolchain ($sysroot_name)"
 
 echo "=== Test 11: tauriBuild/tauriInstall closures replace the defaults ==="
 
@@ -615,6 +670,8 @@ insert_after_anchor 'extraFileset = \.\/migrations;' flake.nix <<'CRANEARGS'
             dontPatch = "SENTINEL_APP_DONT_PATCH";
             dontUnpack = "SENTINEL_APP_DONT_UNPACK";
             doInstallCargoArtifacts = false;
+            doNotRemoveReferencesToRustToolchain = "SENTINEL_APP_DO_NOT_REMOVE_TOOLCHAIN";
+            doNotRemoveReferencesToVendorDir = "SENTINEL_APP_DO_NOT_REMOVE_VENDOR_DIR";
             fixupPhase = "echo SENTINEL_APP_FIXUP_PHASE";
             installPhase = "echo SENTINEL_APP_INSTALL_PHASE";
             installPhaseCommand = "echo SENTINEL_APP_INSTALL_PHASE_CARGO";

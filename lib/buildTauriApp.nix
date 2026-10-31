@@ -475,6 +475,8 @@ let
     "checkPhase"
     "checkPhaseCargoCommand"
     "doInstallCargoArtifacts"
+    "doNotRemoveReferencesToRustToolchain"
+    "doNotRemoveReferencesToVendorDir"
     "dontBuild"
     "dontCheck"
     "dontConfigure"

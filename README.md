@@ -124,8 +124,11 @@ nix flake init -t github:JPHutchins/crane-tauri
   desktop entry and icons on Linux; the `.app` plus the binary on macOS
 - like crane's `buildPackage`, `tauri.app` strips the Rust toolchain and
   vendored crate source paths from its outputs, so neither is in the runtime
-  closure (requires crane ≥ 0.20.1); opt out via `craneArgs` with crane's
-  `doNotRemoveReferencesToRustToolchain` / `doNotRemoveReferencesToVendorDir`
+  closure (requires crane ≥ 0.20.2). The strip runs as `postInstall` hooks, so
+  a `craneArgs` `installPhase` / `phases` override must still `runHook
+  postInstall`; opt out via `craneArgs` with crane's
+  `doNotRemoveReferencesToRustToolchain` / `doNotRemoveReferencesToVendorDir`,
+  which reach only the app derivation (the deps cache is unaffected)
 - `tauri.wrappedApp` is the same package wrapped with `wrapGAppsHook3`
   (Linux; passes through unchanged on macOS) so the runtime lookups of the
   libraries the lib declares — pixbuf loaders, GSettings schemas, GIO/TLS
